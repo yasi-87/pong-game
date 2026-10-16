@@ -1347,6 +1347,59 @@
     color: #6a7ba8;
     padding: 10px 0;
   }
+  .history-hint {
+    font-size: 11px;
+    color: #4a5270;
+    margin-top: 8px;
+  }
+  .profile-stats {
+    display: none;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin: -4px 0 16px;
+  }
+  .profile-stats.visible { display: grid; }
+  .profile-stats .stat {
+    text-align: center;
+    padding: 8px 4px;
+    border-radius: 10px;
+    background: rgba(14, 20, 40, 0.75);
+    border: 1px solid rgba(80, 115, 220, 0.2);
+  }
+  .profile-stats .stat b {
+    display: block;
+    font-family: 'Orbitron', sans-serif;
+    font-size: 15px;
+    color: #eef3ff;
+  }
+  .profile-stats .stat span {
+    font-size: 9px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #6a7ba8;
+  }
+  .history-table .opp-row { cursor: pointer; }
+  .history-table .opp-row:hover td { background: rgba(50, 75, 150, 0.1); }
+  .history-table .pts-cell { white-space: nowrap; }
+  .history-table .games-row td {
+    padding: 4px 8px 10px;
+    background: rgba(8, 11, 26, 0.6);
+  }
+  .game-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .game-chip {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid rgba(80, 115, 220, 0.2);
+    color: #c2cbe8;
+    white-space: nowrap;
+  }
+  .game-chip.win { border-color: rgba(79, 209, 224, 0.35); color: #4fd1e0; }
+  .game-chip.loss { border-color: rgba(214, 126, 224, 0.35); color: #d67ee0; }
   .vs-names {
     display: flex;
     align-items: center;
@@ -1707,6 +1760,7 @@
             <div class="profile-avatar" id="profileAvatar">?</div>
             <input class="text-input" id="playerNameInput" type="text" maxlength="16" placeholder="Enter your name" autocomplete="username" />
           </div>
+          <div class="profile-stats" id="profileStats"></div>
 
           <p class="panel-desc">
             Create a room and share the code, or join a friend's room.
@@ -1734,13 +1788,16 @@
               <thead>
                 <tr>
                   <th>Opponent</th>
+                  <th>Games</th>
                   <th>W</th>
                   <th>L</th>
+                  <th>Points</th>
                   <th>Last</th>
                 </tr>
               </thead>
               <tbody id="historyBody"></tbody>
             </table>
+            <div class="history-hint" id="historyHint" style="display:none;">Tap an opponent to see every game's score.</div>
           </div>
 
         </div>
@@ -2678,9 +2735,13 @@ const CosmicBackground = {
     const opp = (opponentName || 'Opponent').trim() || 'Opponent';
     const hist = loadHistory();
     if (!hist[opp]) hist[opp] = { wins: 0, losses: 0, last: '', games: [] };
+    normalizeEntry(hist[opp]);
     const won = myScore > oppScore;
     if (won) hist[opp].wins++;
     else hist[opp].losses++;
+    hist[opp].played++;
+    hist[opp].pf += myScore;
+    hist[opp].pa += oppScore;
     hist[opp].last = myScore + '-' + oppScore;
     hist[opp].games.push({
       me: myScore,
@@ -2709,12 +2770,55 @@ const CosmicBackground = {
     }
     if (historyEmpty) historyEmpty.style.display = 'none';
     if (historyTable) historyTable.style.display = 'table';
-    historyBody.innerHTML = entries.map(([name, d]) => {
-      return '<tr><td class="name-cell">' + escapeHtml(name) + '</td>' +
-        '<td class="win">' + (d.wins || 0) + '</td>' +
-        '<td class="loss">' + (d.losses || 0) + '</td>' +
-        '<td>' + escapeHtml(d.last || '—') + '</td></tr>';
+    const hint = document.getElementById('historyHint');
+    if (hint) hint.style.display = 'block';
+    historyBody.innerHTML = entries.map(([name, d], i) => {
+      normalizeEntry(d);
+      const chips = (d.games || []).slice().reverse().map((g, n) =>
+        '<span class="game-chip ' + (g.won ? 'win' : 'loss') + '">' +
+        'Game ' + (d.played - n) + ': ' + g.me + ' – ' + g.opp + '</span>'
+      ).join('');
+      return '<tr class="opp-row" data-i="' + i + '"><td class="name-cell">' + escapeHtml(name) + '</td>' +
+        '<td>' + d.played + '</td>' +
+        '<td class="win">' + d.wins + '</td>' +
+        '<td class="loss">' + d.losses + '</td>' +
+        '<td class="pts-cell">' + d.pf + ' – ' + d.pa + '</td>' +
+        '<td>' + escapeHtml(d.last || '—') + '</td></tr>' +
+        '<tr class="games-row" id="games-' + i + '" style="display:none;"><td colspan="6">' +
+        '<div class="game-list">' + (chips || '—') + '</div></td></tr>';
     }).join('');
+    historyBody.querySelectorAll('.opp-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const g = document.getElementById('games-' + row.dataset.i);
+        if (g) g.style.display = g.style.display === 'none' ? 'table-row' : 'none';
+      });
+    });
+    renderStats(entries);
+  }
+
+  /* Older saved data only has wins/losses/games — fill in the new totals. */
+  function normalizeEntry(d) {
+    if (!Array.isArray(d.games)) d.games = [];
+    d.wins = d.wins || 0;
+    d.losses = d.losses || 0;
+    if (typeof d.played !== 'number') d.played = Math.max(d.wins + d.losses, d.games.length);
+    if (typeof d.pf !== 'number') d.pf = d.games.reduce((s, g) => s + (g.me || 0), 0);
+    if (typeof d.pa !== 'number') d.pa = d.games.reduce((s, g) => s + (g.opp || 0), 0);
+    return d;
+  }
+
+  function renderStats(entries) {
+    const box = document.getElementById('profileStats');
+    if (!box) return;
+    if (!entries.length) { box.classList.remove('visible'); box.innerHTML = ''; return; }
+    let played = 0, wins = 0, pf = 0, pa = 0;
+    entries.forEach(([, d]) => { normalizeEntry(d); played += d.played; wins += d.wins; pf += d.pf; pa += d.pa; });
+    box.innerHTML =
+      '<div class="stat"><b>' + played + '</b><span>Games</span></div>' +
+      '<div class="stat"><b>' + wins + '</b><span>Wins</span></div>' +
+      '<div class="stat"><b>' + (played - wins) + '</b><span>Losses</span></div>' +
+      '<div class="stat"><b>' + pf + '–' + pa + '</b><span>Points</span></div>';
+    box.classList.add('visible');
   }
 
   function escapeHtml(s) {
