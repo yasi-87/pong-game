@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>Orbit Pong — A New Dimension of Arcade</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -226,86 +226,132 @@
 
   /* Fullscreen game mode — no frame, pure black */
   .stage.game-active {
-    position: fixed;
-    inset: 0;
-    width: 100vw;
-    height: 100dvh;
-    max-width: none;
-    max-height: none;
-    border-radius: 0;
-    border: none;
-    box-shadow: none;
-    background: #000;
-    grid-template-columns: 1fr;
-    z-index: 100;
-    animation: none;
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #000 !important;
+    grid-template-columns: 1fr !important;
+    z-index: 100 !important;
+    animation: none !important;
   }
   .stage.game-active::before,
   .stage.game-active::after {
-    display: none;
+    display: none !important;
   }
   .stage.game-active .hero {
-    display: none;
+    display: none !important;
   }
   .stage.game-active .right {
-    padding: 0;
-    width: 100%;
-    height: 100%;
+    padding: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    position: absolute !important;
+    inset: 0 !important;
   }
   .stage.game-active .screen.active {
-    position: absolute;
-    inset: 0;
-    padding: 0;
-    display: flex;
-    align-items: stretch;
-    justify-content: stretch;
+    position: absolute !important;
+    inset: 0 !important;
+    padding: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: 100% !important;
   }
   .stage.game-active .panel {
-    max-width: none;
-    width: 100%;
-    height: 100%;
-    max-height: none;
-    border-radius: 0;
-    border: none;
-    box-shadow: none;
-    background: #000;
-    padding: 0;
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
+    max-width: none !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: none !important;
+    border-radius: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    background: #000 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+    display: block !important;
+    position: absolute !important;
+    inset: 0 !important;
   }
   .stage.game-active .panel::before,
   .stage.game-active .panel::after {
-    display: none;
+    display: none !important;
   }
   .stage.game-active .back-row {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    z-index: 30;
-    margin: 0;
-    background: transparent;
+    position: absolute !important;
+    top: max(12px, env(safe-area-inset-top, 12px)) !important;
+    left: max(12px, env(safe-area-inset-left, 12px)) !important;
+    z-index: 40 !important;
+    margin: 0 !important;
+    background: transparent !important;
+    width: auto !important;
   }
   .stage.game-active .back-row .back-title,
   .stage.game-active .back-row .key,
   .stage.game-active .back-row > div:not(.btn-back) {
-    display: none;
+    display: none !important;
   }
   .stage.game-active .btn-back {
-    background: rgba(0, 0, 0, 0.45);
-    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(0, 0, 0, 0.55) !important;
+    border-color: rgba(255, 255, 255, 0.22) !important;
     backdrop-filter: blur(8px);
+  }
+  /* Hide in-flow chrome so canvas can fill the whole screen */
+  .stage.game-active .vs-names {
+    position: absolute !important;
+    top: max(14px, env(safe-area-inset-top, 14px)) !important;
+    left: 50% !important;
+    transform: translateX(-50%) !important;
+    z-index: 35 !important;
+    margin: 0 !important;
+    pointer-events: none !important;
+    width: auto !important;
+  }
+  .stage.game-active .game-container {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    border-radius: 0 !important;
+    z-index: 1 !important;
+  }
+  .stage.game-active .game-canvas {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+  }
+  body.game-playing {
+    overflow: hidden !important;
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
   }
   body.game-playing::before,
   body.game-playing::after {
-    display: none;
+    display: none !important;
   }
   body.game-playing #stars,
   body.game-playing #particles {
-    display: none;
+    display: none !important;
   }
   body.game-playing .shell {
-    padding: 0;
+    padding: 0 !important;
+    min-height: 0 !important;
+    height: 100% !important;
+    width: 100% !important;
+  }
+  html.game-playing,
+  html.game-playing body {
+    height: 100% !important;
+    overflow: hidden !important;
   }
 
   @keyframes stageIn {
@@ -1702,7 +1748,7 @@
 
       <!-- SINGLE PLAYER GAME SCREEN -->
       <div class="screen" data-screen="single">
-        <div class="panel" style="padding: 10px; overflow: hidden;">
+        <div class="panel" style="padding: 0; overflow: hidden;">
           <div class="back-row" style="margin-bottom: 10px; padding: 0 4px;">
             <button class="btn-back" data-nav="modes" aria-label="Back">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
@@ -1727,7 +1773,7 @@
 
       <!-- ONLINE GAME SCREEN -->
       <div class="screen" data-screen="onlineGame">
-        <div class="panel" style="padding: 10px; overflow: hidden;">
+        <div class="panel" style="padding: 0; overflow: hidden;">
           <div class="back-row" style="margin-bottom: 10px; padding: 0 4px;">
             <button class="btn-back" data-nav="online" aria-label="Back" id="gameBackBtn">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M11 18l-6-6 6-6"/></svg>
@@ -2012,11 +2058,13 @@ function show(name) {
   if (name === 'single' || name === 'onlineGame') {
     stage.classList.add('game-active');
     document.body.classList.add('game-playing');
+    document.documentElement.classList.add('game-playing');
     if (window.bgStarfield) window.bgStarfield.pause();
     if (window.bgParticles) window.bgParticles.pause();
   } else {
     stage.classList.remove('game-active');
     document.body.classList.remove('game-playing');
+    document.documentElement.classList.remove('game-playing');
     if (window.bgStarfield) window.bgStarfield.resume();
     if (window.bgParticles) window.bgParticles.resume();
   }
@@ -2076,6 +2124,19 @@ navButtons.forEach(btn => {
 /* ================================================================
    COSMIC BACKGROUND RENDERER (Black Hole + Stars)
    ================================================================ */
+
+/* Accurate viewport size for mobile (handles address bar / visualViewport) */
+function getGameSize() {
+  const vv = window.visualViewport;
+  if (vv && vv.width && vv.height) {
+    return { w: Math.round(vv.width), h: Math.round(vv.height) };
+  }
+  return {
+    w: Math.round(window.innerWidth || document.documentElement.clientWidth),
+    h: Math.round(window.innerHeight || document.documentElement.clientHeight)
+  };
+}
+
 const CosmicBackground = {
   stars: [],
   initialized: false,
@@ -2239,12 +2300,13 @@ const CosmicBackground = {
 
   function resizeCanvas() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    W = window.innerWidth;
-    H = window.innerHeight;
+    const size = getGameSize();
+    W = size.w;
+    H = size.h;
     canvas.width = Math.floor(W * dpr);
     canvas.height = Math.floor(H * dpr);
-    canvas.style.width = W + 'px';
-    canvas.style.height = H + 'px';
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     playerY = Math.max(0, Math.min(H - PADDLE_H, playerY));
     aiY = Math.max(0, Math.min(H - PADDLE_H, aiY));
@@ -2557,9 +2619,14 @@ const CosmicBackground = {
   });
 
   restartBtn.addEventListener('click', start);
-  window.addEventListener('resize', () => {
+  function onSpResize() {
     if (currentScreen === 'single') resizeCanvas();
-  });
+  }
+  window.addEventListener('resize', onSpResize);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', onSpResize);
+    window.visualViewport.addEventListener('scroll', onSpResize);
+  }
   gameLoop();
 
   window.singlePlayerGame = { start, stop };
@@ -2906,8 +2973,9 @@ const CosmicBackground = {
     const oppNameDisplay = document.getElementById('oppNameDisplay');
     const touchZone = document.getElementById('onlineTouchZone');
 
-    let W = window.innerWidth, H = window.innerHeight;
-    const PADDLE_W = 8, PADDLE_H = 110, BALL_R = 9;
+    let W = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
+    let H = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+    const PADDLE_H = 110, PADDLE_W = 8, BALL_R = 9;
     const PLAYER_SPEED = 8;
     const PAD_X = 28;
 
@@ -2935,12 +3003,13 @@ const CosmicBackground = {
 
     function resizeCanvas() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      W = window.innerWidth;
-      H = window.innerHeight;
+      const size = getGameSize();
+      W = size.w;
+      H = size.h;
       canvas.width = Math.floor(W * dpr);
       canvas.height = Math.floor(H * dpr);
-      canvas.style.width = W + 'px';
-      canvas.style.height = H + 'px';
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       playerY = Math.max(0, Math.min(H - PADDLE_H, playerY));
       oppY = Math.max(0, Math.min(H - PADDLE_H, oppY));
@@ -3230,6 +3299,10 @@ const CosmicBackground = {
     }
     function onKeyUp(e) { keys[e.key] = false; }
     const onResize = () => { if (currentScreen === 'onlineGame') resizeCanvas(); };
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', onResize);
+      window.visualViewport.addEventListener('scroll', onResize);
+    }
 
     // Smooth touch / pointer control for mobile (absolute Y tracking)
     let touchActive = false;
@@ -3277,6 +3350,10 @@ const CosmicBackground = {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', onResize);
+      if (window.visualViewport) {
+        window.visualViewport.removeEventListener('resize', onResize);
+        window.visualViewport.removeEventListener('scroll', onResize);
+      }
       touchTarget.removeEventListener('pointerdown', onPointerDown);
       touchTarget.removeEventListener('pointermove', onPointerMove);
       touchTarget.removeEventListener('pointerup', onPointerUp);
