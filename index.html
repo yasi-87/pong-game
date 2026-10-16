@@ -1226,6 +1226,135 @@
     }
     .hero { padding: 40px 40px 34px 46px; }
   }
+
+  /* Profile + match history */
+  .profile-box {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-bottom: 16px;
+  }
+  .profile-box .text-input {
+    flex: 1;
+    margin-bottom: 0;
+  }
+  .profile-avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #1a4bc4, #7c3aed);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Orbitron', sans-serif;
+    font-weight: 700;
+    font-size: 16px;
+    color: #eef3ff;
+    flex-shrink: 0;
+    border: 1px solid rgba(140, 180, 255, 0.25);
+    box-shadow: 0 0 16px rgba(80, 100, 220, 0.25);
+  }
+  .history-section {
+    margin-top: 18px;
+  }
+  .history-section .panel-eyebrow {
+    margin-bottom: 8px;
+  }
+  .history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12.5px;
+    margin-top: 6px;
+  }
+  .history-table th {
+    text-align: left;
+    color: #6a7ba8;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 10px;
+    padding: 6px 8px;
+    border-bottom: 1px solid rgba(100, 140, 220, 0.18);
+  }
+  .history-table td {
+    padding: 8px;
+    color: #c2cbe8;
+    border-bottom: 1px solid rgba(80, 100, 160, 0.1);
+  }
+  .history-table tr:last-child td {
+    border-bottom: none;
+  }
+  .history-table .name-cell {
+    font-weight: 600;
+    color: #eef3ff;
+  }
+  .history-table .win {
+    color: #4fd1e0;
+    font-weight: 700;
+  }
+  .history-table .loss {
+    color: #d67ee0;
+    font-weight: 700;
+  }
+  .history-empty {
+    font-size: 12.5px;
+    color: #6a7ba8;
+    padding: 10px 0;
+  }
+  .vs-names {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 6px;
+    font-family: 'Orbitron', sans-serif;
+    font-size: clamp(13px, 1.4vw, 16px);
+    letter-spacing: 0.06em;
+  }
+  .vs-names .me {
+    color: #4fd1e0;
+  }
+  .vs-names .opp {
+    color: #d67ee0;
+  }
+  .vs-names .vs {
+    color: #6a7ba8;
+    font-size: 11px;
+  }
+
+  /* Mobile touch zones for paddle */
+  .touch-zone {
+    display: none;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 38%;
+    z-index: 25;
+    touch-action: none;
+    pointer-events: auto;
+  }
+  @media (hover: none), (pointer: coarse) {
+    .touch-zone {
+      display: block;
+    }
+    .touch-hint {
+      display: block;
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: rgba(150, 170, 210, 0.55);
+      pointer-events: none;
+      z-index: 26;
+      white-space: nowrap;
+    }
+  }
+  .touch-hint { display: none; }
+
 </style>
 </head>
 <body>
@@ -1527,6 +1656,12 @@
           </div>
           <div class="panel-eyebrow" style="margin-top:-14px;">Connect across the stars</div>
 
+          <div class="field-label">Your name</div>
+          <div class="profile-box">
+            <div class="profile-avatar" id="profileAvatar">?</div>
+            <input class="text-input" id="playerNameInput" type="text" maxlength="16" placeholder="Enter your name" autocomplete="username" />
+          </div>
+
           <p class="panel-desc">
             Create a room and share the code, or join a friend's room.
           </p>
@@ -1543,7 +1678,23 @@
           <button class="btn btn-secondary" id="joinRoomBtn">Join room</button>
 
           <div class="note-box" id="onlineNote">
-            Powered by <strong>Supabase Realtime</strong>. Paste your <strong>anon key</strong> in the multiplayer config (SUPABASE_ANON_KEY).
+            Powered by <strong>Supabase Realtime</strong>.
+          </div>
+
+          <div class="history-section">
+            <div class="panel-eyebrow">Match history</div>
+            <div id="historyEmpty" class="history-empty">No matches yet. Play someone to build your record.</div>
+            <table class="history-table" id="historyTable" style="display:none;">
+              <thead>
+                <tr>
+                  <th>Opponent</th>
+                  <th>W</th>
+                  <th>L</th>
+                  <th>Last</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
           </div>
 
         </div>
@@ -1563,6 +1714,8 @@
           </div>
           <div class="game-container">
             <canvas id="singleCanvas" class="game-canvas" width="800" height="500"></canvas>
+            <div class="touch-zone" id="singleTouchZone" aria-hidden="true"></div>
+            <div class="touch-hint">Drag to move paddle</div>
             <div class="game-overlay" id="singleOverlay">
               <h2 id="singleResult">GAME OVER</h2>
               <p id="singleScoreDisplay">0 - 0</p>
@@ -1584,9 +1737,16 @@
               <span class="key" id="playerRoleTag" style="font-family:'Orbitron'; color:var(--accent-pink); font-size:12px; padding:4px 10px; border-radius:6px; background:rgba(214,126,224,0.07); border:1px solid rgba(214,126,224,0.2);">P1</span>
             </div>
           </div>
+          <div class="vs-names" id="vsNamesDisplay">
+            <span class="me" id="myNameDisplay">You</span>
+            <span class="vs">VS</span>
+            <span class="opp" id="oppNameDisplay">Opponent</span>
+          </div>
           <div class="game-container">
             <canvas id="onlineCanvas" class="game-canvas" width="800" height="500"></canvas>
             <div class="room-status" id="roomStatusDisplay">Connecting...</div>
+            <div class="touch-zone" id="onlineTouchZone" aria-hidden="true"></div>
+            <div class="touch-hint">Drag to move paddle</div>
             <div class="game-overlay" id="onlineOverlay">
               <h2 id="onlineResult">WAITING...</h2>
               <p id="onlineScoreDisplay">0 - 0</p>
@@ -1646,11 +1806,13 @@
   const canvas = document.getElementById('stars');
   const ctx = canvas.getContext('2d');
   let w, h, stars = [];
+  let running = true;
+  let rafId = null;
 
   function resize() {
     w = canvas.width = window.innerWidth;
     h = canvas.height = window.innerHeight;
-    const count = Math.floor((w * h) / 9500);
+    const count = Math.min(180, Math.floor((w * h) / 12000));
     stars = Array.from({ length: count }, () => ({
       x: Math.random() * w,
       y: Math.random() * h,
@@ -1663,6 +1825,7 @@
   }
 
   function draw() {
+    if (!running) return;
     ctx.clearRect(0, 0, w, h);
     for (const s of stars) {
       s.a += s.tw * s.dir;
@@ -1676,9 +1839,21 @@
       ctx.fillStyle = color;
       ctx.fill();
     }
-    requestAnimationFrame(draw);
+    rafId = requestAnimationFrame(draw);
   }
 
+  function pause() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  function resume() {
+    if (running) return;
+    running = true;
+    draw();
+  }
+
+  window.bgStarfield = { pause, resume };
   window.addEventListener('resize', resize);
   resize();
   draw();
@@ -1689,21 +1864,23 @@
   const canvas = document.getElementById('particles');
   const ctx = canvas.getContext('2d');
   let w, h, particles = [], mouse = { x: -9999, y: -9999 };
+  let running = true;
+  let rafId = null;
 
   const CONFIG = {
-    density: 18000,
+    density: 28000,
     maxSpeed: 0.26,
     dotMin: 0.6,
-    dotMax: 1.8,
-    linkDist: 130,
-    mouseRadius: 150,
+    dotMax: 1.6,
+    linkDist: 100,
+    mouseRadius: 140,
     lineColor: '110, 150, 220'
   };
 
   function resize() {
     w = canvas.width = window.innerWidth;
     h = canvas.height = window.innerHeight;
-    const count = Math.min(90, Math.floor((w * h) / CONFIG.density));
+    const count = Math.min(55, Math.floor((w * h) / CONFIG.density));
     particles = Array.from({ length: count }, () => ({
       x: Math.random() * w,
       y: Math.random() * h,
@@ -1736,6 +1913,7 @@
   });
 
   function step() {
+    if (!running) return;
     ctx.clearRect(0, 0, w, h);
 
     for (const p of particles) {
@@ -1769,6 +1947,7 @@
       if (p.y > h + 20) p.y = -20;
     }
 
+    ctx.lineWidth = 0.55;
     for (let i = 0; i < particles.length; i++) {
       const a = particles[i];
       for (let j = i + 1; j < particles.length; j++) {
@@ -1778,9 +1957,8 @@
         const d2 = dx * dx + dy * dy;
         const max2 = CONFIG.linkDist * CONFIG.linkDist;
         if (d2 < max2) {
-          const alpha = (1 - d2 / max2) * 0.25;
+          const alpha = (1 - d2 / max2) * 0.22;
           ctx.strokeStyle = `rgba(${CONFIG.lineColor}, ${alpha})`;
-          ctx.lineWidth = 0.6;
           ctx.beginPath();
           ctx.moveTo(a.x, a.y);
           ctx.lineTo(b.x, b.y);
@@ -1797,15 +1975,24 @@
       ctx.beginPath();
       ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
       ctx.fillStyle = col;
-      ctx.shadowColor = p.hue === 'pink' ? 'rgba(180, 110, 200, 0.7)' : 'rgba(90, 130, 210, 0.7)';
-      ctx.shadowBlur = 7;
       ctx.fill();
-      ctx.shadowBlur = 0;
     }
 
-    requestAnimationFrame(step);
+    rafId = requestAnimationFrame(step);
   }
 
+  function pause() {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    rafId = null;
+  }
+  function resume() {
+    if (running) return;
+    running = true;
+    step();
+  }
+
+  window.bgParticles = { pause, resume };
   window.addEventListener('resize', resize);
   resize();
   step();
@@ -1825,9 +2012,13 @@ function show(name) {
   if (name === 'single' || name === 'onlineGame') {
     stage.classList.add('game-active');
     document.body.classList.add('game-playing');
+    if (window.bgStarfield) window.bgStarfield.pause();
+    if (window.bgParticles) window.bgParticles.pause();
   } else {
     stage.classList.remove('game-active');
     document.body.classList.remove('game-playing');
+    if (window.bgStarfield) window.bgStarfield.resume();
+    if (window.bgParticles) window.bgParticles.resume();
   }
 
   screens.forEach(s => {
@@ -1895,7 +2086,7 @@ const CosmicBackground = {
     this.stars = [];
     this.lastW = w;
     this.lastH = h;
-    const starCount = Math.max(80, Math.floor((w * h) / 5000));
+    const starCount = Math.max(50, Math.min(160, Math.floor((w * h) / 8000)));
     for (let i = 0; i < starCount; i++) {
       this.stars.push({
         x: Math.random() * w,
@@ -1953,7 +2144,7 @@ const CosmicBackground = {
     ctx.save();
     ctx.translate(cx, cy);
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 55;
+    ctx.shadowBlur = 28;
     const diskW = holeR * 3.6;
     const diskH = holeR * 0.32;
     const dg = ctx.createLinearGradient(-diskW, 0, diskW, 0);
@@ -1980,7 +2171,7 @@ const CosmicBackground = {
     // Bright photon ring
     ctx.save();
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 40;
+    ctx.shadowBlur = 22;
     const rg = ctx.createRadialGradient(cx, cy, holeR * 0.95, cx, cy, holeR * 1.42);
     rg.addColorStop(0, 'rgba(255,255,255,0)');
     rg.addColorStop(0.3, 'rgba(255,255,255,0.2)');
@@ -2155,7 +2346,7 @@ const CosmicBackground = {
 
     // Core
     ctx.shadowColor = '#ffffff';
-    ctx.shadowBlur = 50;
+    ctx.shadowBlur = 22;
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
@@ -2324,6 +2515,36 @@ const CosmicBackground = {
     requestAnimationFrame(gameLoop);
   }
 
+  // Touch / pointer control for mobile
+  const singleTouchZone = document.getElementById('singleTouchZone');
+  let spTouchActive = false;
+  function spPointerToY(clientY) {
+    const rect = canvas.getBoundingClientRect();
+    const y = ((clientY - rect.top) / rect.height) * H;
+    return Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2));
+  }
+  function spOnDown(e) {
+    if (currentScreen !== 'single') return;
+    spTouchActive = true;
+    playerY = spPointerToY(e.clientY);
+    e.preventDefault();
+  }
+  function spOnMove(e) {
+    if (!spTouchActive || currentScreen !== 'single') return;
+    playerY = spPointerToY(e.clientY);
+    e.preventDefault();
+  }
+  function spOnUp() { spTouchActive = false; }
+  const spTouchTarget = singleTouchZone || canvas;
+  spTouchTarget.addEventListener('pointerdown', spOnDown, { passive: false });
+  spTouchTarget.addEventListener('pointermove', spOnMove, { passive: false });
+  spTouchTarget.addEventListener('pointerup', spOnUp);
+  spTouchTarget.addEventListener('pointercancel', spOnUp);
+  canvas.addEventListener('pointerdown', spOnDown, { passive: false });
+  canvas.addEventListener('pointermove', spOnMove, { passive: false });
+  canvas.addEventListener('pointerup', spOnUp);
+  canvas.addEventListener('pointercancel', spOnUp);
+
   window.addEventListener('keydown', (e) => {
     keys[e.key] = true;
     if (e.key === ' ' && currentScreen === 'single' && !running) {
@@ -2349,6 +2570,110 @@ const CosmicBackground = {
    ================================================================ */
 (function OnlineMultiplayerGame() {
   // ========== CONFIG ==========
+
+/* ================= Player profile + match history ================= */
+(function playerProfile() {
+  const nameInput = document.getElementById('playerNameInput');
+  const avatarEl = document.getElementById('profileAvatar');
+  const historyBody = document.getElementById('historyBody');
+  const historyTable = document.getElementById('historyTable');
+  const historyEmpty = document.getElementById('historyEmpty');
+
+  const NAME_KEY = 'orbit_player_name';
+  const HIST_KEY = 'orbit_match_history';
+
+  function getName() {
+    return (localStorage.getItem(NAME_KEY) || '').trim() || 'Player';
+  }
+
+  function setName(n) {
+    const clean = (n || '').trim().slice(0, 16) || 'Player';
+    localStorage.setItem(NAME_KEY, clean);
+    if (nameInput) nameInput.value = clean;
+    if (avatarEl) avatarEl.textContent = clean.charAt(0).toUpperCase();
+    return clean;
+  }
+
+  function loadHistory() {
+    try {
+      return JSON.parse(localStorage.getItem(HIST_KEY) || '{}');
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function saveHistory(h) {
+    localStorage.setItem(HIST_KEY, JSON.stringify(h));
+  }
+
+  /** Record a match result against an opponent */
+  function recordMatch(opponentName, myScore, oppScore) {
+    const opp = (opponentName || 'Opponent').trim() || 'Opponent';
+    const hist = loadHistory();
+    if (!hist[opp]) hist[opp] = { wins: 0, losses: 0, last: '', games: [] };
+    const won = myScore > oppScore;
+    if (won) hist[opp].wins++;
+    else hist[opp].losses++;
+    hist[opp].last = myScore + '-' + oppScore;
+    hist[opp].games.push({
+      me: myScore,
+      opp: oppScore,
+      won,
+      at: Date.now()
+    });
+    // Keep last 20 games per opponent
+    if (hist[opp].games.length > 20) hist[opp].games = hist[opp].games.slice(-20);
+    saveHistory(hist);
+    renderHistory();
+  }
+
+  function renderHistory() {
+    if (!historyBody) return;
+    const hist = loadHistory();
+    const entries = Object.entries(hist).sort((a, b) => {
+      const ta = (a[1].games && a[1].games.length) ? a[1].games[a[1].games.length - 1].at : 0;
+      const tb = (b[1].games && b[1].games.length) ? b[1].games[b[1].games.length - 1].at : 0;
+      return tb - ta;
+    });
+    if (!entries.length) {
+      if (historyEmpty) historyEmpty.style.display = 'block';
+      if (historyTable) historyTable.style.display = 'none';
+      return;
+    }
+    if (historyEmpty) historyEmpty.style.display = 'none';
+    if (historyTable) historyTable.style.display = 'table';
+    historyBody.innerHTML = entries.map(([name, d]) => {
+      return '<tr><td class="name-cell">' + escapeHtml(name) + '</td>' +
+        '<td class="win">' + (d.wins || 0) + '</td>' +
+        '<td class="loss">' + (d.losses || 0) + '</td>' +
+        '<td>' + escapeHtml(d.last || '—') + '</td></tr>';
+    }).join('');
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    })[c]);
+  }
+
+  // Init
+  const saved = localStorage.getItem(NAME_KEY);
+  if (nameInput) {
+    nameInput.value = saved || '';
+    if (avatarEl) avatarEl.textContent = (saved || '?').charAt(0).toUpperCase();
+    nameInput.addEventListener('input', () => {
+      const v = nameInput.value.trim().slice(0, 16);
+      if (avatarEl) avatarEl.textContent = (v || '?').charAt(0).toUpperCase();
+    });
+    nameInput.addEventListener('change', () => setName(nameInput.value));
+    nameInput.addEventListener('blur', () => setName(nameInput.value));
+  }
+  renderHistory();
+
+  window.OrbitProfile = { getName, setName, recordMatch, renderHistory, loadHistory };
+})();
+
+
   const SUPABASE_URL = 'https://yckjxffgejalijsxpzmj.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inlja2p4ZmZnZWphbGlqc3hwem1qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE5MDc4NzIsImV4cCI6MjEwNzQ4Mzg3Mn0.DjAvPUX55hu7VQneBaAsqOm1F7MLpJ5aC6Ho61-PqC8'; // <-- paste anon public key here
   // ============================
@@ -2421,6 +2746,16 @@ const CosmicBackground = {
     const client = getClient();
     if (!client) return;
 
+    const myName = window.OrbitProfile
+      ? window.OrbitProfile.setName(document.getElementById('playerNameInput')?.value)
+      : 'Player';
+    if (!myName || myName === 'Player') {
+      const inp = document.getElementById('playerNameInput');
+      if (inp) { inp.focus(); inp.placeholder = 'Please enter your name first'; }
+      onlineNote.textContent = 'Enter your name before creating a room.';
+      return;
+    }
+
     await leaveRoom();
     const code = randomCode();
     isHost = true;
@@ -2452,12 +2787,21 @@ const CosmicBackground = {
     channel
       .on('broadcast', { event: 'join' }, ({ payload }) => {
         if (!isHost) return;
-        onlineNote.innerHTML = 'Friend joined! Starting…';
+        const oppName = (payload && payload.name) || 'Opponent';
+        onlineNote.innerHTML = '<strong>' + oppName + '</strong> joined! Starting…';
         client.from('rooms').update({ status: 'playing', guest_id: payload.playerId }).eq('code', code);
-        channel.send({ type: 'broadcast', event: 'start', payload: { hostId: playerId } });
-        window.gameConnection = { isConnected: true, isHost: true, roomCode: code };
+        const myName = window.OrbitProfile ? window.OrbitProfile.getName() : 'Player';
+        channel.send({
+          type: 'broadcast',
+          event: 'start',
+          payload: { hostId: playerId, hostName: myName, guestName: oppName }
+        });
+        window.gameConnection = {
+          isConnected: true, isHost: true, roomCode: code,
+          myName, oppName
+        };
         show('onlineGame');
-        initOnlineGame({ isHost: true, channel, roomCode: code, playerId });
+        initOnlineGame({ isHost: true, channel, roomCode: code, playerId, myName, oppName });
       })
       .subscribe((status) => {
         if (status === 'SUBSCRIBED') {
@@ -2471,6 +2815,16 @@ const CosmicBackground = {
   async function joinRoom() {
     const client = getClient();
     if (!client) return;
+
+    const myName = window.OrbitProfile
+      ? window.OrbitProfile.setName(document.getElementById('playerNameInput')?.value)
+      : 'Player';
+    if (!myName || myName === 'Player') {
+      const inp = document.getElementById('playerNameInput');
+      if (inp) { inp.focus(); inp.placeholder = 'Please enter your name first'; }
+      onlineNote.textContent = 'Enter your name before joining a room.';
+      return;
+    }
 
     const code = (joinInput.value || '').trim().toUpperCase().replace(/\s+/g, '');
     if (!code) {
@@ -2504,25 +2858,35 @@ const CosmicBackground = {
     });
 
     let started = false;
-    const startGame = () => {
+    let hostNameFromStart = 'Opponent';
+    const startGame = (startPayload) => {
       if (started) return;
       started = true;
-      window.gameConnection = { isConnected: true, isHost: false, roomCode: code };
+      const myName = window.OrbitProfile ? window.OrbitProfile.getName() : 'Player';
+      const oppName = (startPayload && startPayload.hostName) || hostNameFromStart || 'Opponent';
+      window.gameConnection = {
+        isConnected: true, isHost: false, roomCode: code,
+        myName, oppName
+      };
       show('onlineGame');
-      initOnlineGame({ isHost: false, channel, roomCode: code, playerId });
+      initOnlineGame({ isHost: false, channel, roomCode: code, playerId, myName, oppName });
     };
 
     channel
-      .on('broadcast', { event: 'start' }, startGame)
+      .on('broadcast', { event: 'start' }, ({ payload }) => {
+        if (payload && payload.hostName) hostNameFromStart = payload.hostName;
+        startGame(payload);
+      })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
+          const myName = window.OrbitProfile ? window.OrbitProfile.getName() : 'Player';
           await channel.send({
             type: 'broadcast',
             event: 'join',
-            payload: { playerId }
+            payload: { playerId, name: myName }
           });
           onlineNote.textContent = 'Joined! Waiting for host…';
-          setTimeout(startGame, 1800);
+          setTimeout(() => startGame(null), 1800);
         }
       });
 
@@ -2538,6 +2902,9 @@ const CosmicBackground = {
     const restartBtn = document.getElementById('onlineRestartBtn');
     const roomStatus = document.getElementById('roomStatusDisplay');
     const playerRoleTag = document.getElementById('playerRoleTag');
+    const myNameDisplay = document.getElementById('myNameDisplay');
+    const oppNameDisplay = document.getElementById('oppNameDisplay');
+    const touchZone = document.getElementById('onlineTouchZone');
 
     let W = window.innerWidth, H = window.innerHeight;
     const PADDLE_W = 8, PADDLE_H = 110, BALL_R = 9;
@@ -2546,8 +2913,12 @@ const CosmicBackground = {
 
     const host = conn.isHost;
     const myRole = host ? 'left' : 'right';
-    if (playerRoleTag) playerRoleTag.textContent = host ? 'P1 (Left)' : 'P2 (Right)';
+    const myName = conn.myName || (window.OrbitProfile ? window.OrbitProfile.getName() : 'Player');
+    const oppName = conn.oppName || 'Opponent';
+    if (playerRoleTag) playerRoleTag.textContent = host ? 'P1 · ' + myName : 'P2 · ' + myName;
     if (roomStatus) roomStatus.textContent = 'Room ' + conn.roomCode + (host ? ' · Host' : ' · Guest');
+    if (myNameDisplay) myNameDisplay.textContent = myName;
+    if (oppNameDisplay) oppNameDisplay.textContent = oppName;
 
     let playerY = (H - PADDLE_H) / 2;
     let oppY = (H - PADDLE_H) / 2;
@@ -2717,7 +3088,7 @@ const CosmicBackground = {
       ctx.arc(ball.x, ball.y, ball.r * 3, 0, Math.PI * 2);
       ctx.fill();
       ctx.shadowColor = '#ffffff';
-      ctx.shadowBlur = 40;
+      ctx.shadowBlur = 22;
       ctx.fillStyle = '#ffffff';
       ctx.beginPath();
       ctx.arc(ball.x, ball.y, ball.r, 0, Math.PI * 2);
@@ -2835,6 +3206,10 @@ const CosmicBackground = {
       overlay.classList.add('visible');
       restartBtn.style.display = 'inline-flex';
       if (host) sendState();
+      // Record match history locally
+      if (window.OrbitProfile) {
+        window.OrbitProfile.recordMatch(oppName, playerScore, oppScore);
+      }
     }
 
     function loop() {
@@ -2856,6 +3231,37 @@ const CosmicBackground = {
     function onKeyUp(e) { keys[e.key] = false; }
     const onResize = () => { if (currentScreen === 'onlineGame') resizeCanvas(); };
 
+    // Smooth touch / pointer control for mobile (absolute Y tracking)
+    let touchActive = false;
+    function pointerToPaddleY(clientY) {
+      const rect = canvas.getBoundingClientRect();
+      const y = ((clientY - rect.top) / rect.height) * H;
+      return Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2));
+    }
+    function onPointerDown(e) {
+      if (currentScreen !== 'onlineGame') return;
+      touchActive = true;
+      playerY = pointerToPaddleY(e.clientY);
+      e.preventDefault();
+    }
+    function onPointerMove(e) {
+      if (!touchActive || currentScreen !== 'onlineGame') return;
+      playerY = pointerToPaddleY(e.clientY);
+      e.preventDefault();
+    }
+    function onPointerUp() { touchActive = false; }
+
+    const touchTarget = touchZone || canvas;
+    touchTarget.addEventListener('pointerdown', onPointerDown, { passive: false });
+    touchTarget.addEventListener('pointermove', onPointerMove, { passive: false });
+    touchTarget.addEventListener('pointerup', onPointerUp);
+    touchTarget.addEventListener('pointercancel', onPointerUp);
+    // Also allow dragging on the whole canvas for better UX
+    canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
+    canvas.addEventListener('pointermove', onPointerMove, { passive: false });
+    canvas.addEventListener('pointerup', onPointerUp);
+    canvas.addEventListener('pointercancel', onPointerUp);
+
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', onResize);
@@ -2871,6 +3277,14 @@ const CosmicBackground = {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', onResize);
+      touchTarget.removeEventListener('pointerdown', onPointerDown);
+      touchTarget.removeEventListener('pointermove', onPointerMove);
+      touchTarget.removeEventListener('pointerup', onPointerUp);
+      touchTarget.removeEventListener('pointercancel', onPointerUp);
+      canvas.removeEventListener('pointerdown', onPointerDown);
+      canvas.removeEventListener('pointermove', onPointerMove);
+      canvas.removeEventListener('pointerup', onPointerUp);
+      canvas.removeEventListener('pointercancel', onPointerUp);
       if (gameLoopId) cancelAnimationFrame(gameLoopId);
       gameLoopId = null;
     };
