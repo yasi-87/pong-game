@@ -239,6 +239,8 @@
     grid-template-columns: 1fr !important;
     z-index: 100 !important;
     animation: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;   /* a full-screen blur behind a 60fps canvas = lag on phones */
   }
   .stage.game-active::before,
   .stage.game-active::after {
@@ -296,9 +298,8 @@
     display: none !important;
   }
   .stage.game-active .btn-back {
-    background: rgba(0, 0, 0, 0.55) !important;
+    background: rgba(0, 0, 0, 0.7) !important;
     border-color: rgba(255, 255, 255, 0.22) !important;
-    backdrop-filter: blur(8px);
   }
   /* Hide in-flow chrome so canvas can fill the whole screen */
   .stage.game-active .vs-names {
@@ -1101,8 +1102,16 @@
     width: 100%;
     height: 100%;
     max-height: none;
-    background: #000;
+    background: transparent;
     touch-action: none;
+  }
+  .bg-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+    pointer-events: none;
   }
 
   .game-overlay {
@@ -1112,8 +1121,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: rgba(0, 0, 0, 0.72);
-    backdrop-filter: blur(6px);
+    background: rgba(0, 0, 0, 0.78);
     border-radius: 0;
     z-index: 10;
     pointer-events: none;
@@ -1123,6 +1131,7 @@
   .game-overlay.visible {
     opacity: 1;
     pointer-events: auto;
+    backdrop-filter: blur(6px);         /* only while the game is paused behind it */
   }
   .game-overlay h2 {
     font-family: 'Orbitron', sans-serif;
@@ -1391,10 +1400,9 @@
     justify-content: center;
     padding: 0;
     border-radius: 12px;
-    background: rgba(0, 0, 0, 0.55);
+    background: rgba(0, 0, 0, 0.7);
     border: 1px solid rgba(255, 255, 255, 0.22);
     color: #dbe4ff;
-    backdrop-filter: blur(8px);
     cursor: pointer;
   }
   body.game-playing .sound-btn { display: flex; }
@@ -2391,47 +2399,80 @@ function getGameSize() {
   };
 }
 
-const CosmicBackground = {
-  stars: [],
-  initialized: false,
-  lastW: 0,
-  lastH: 0,
-
-  init(w, h) {
-    this.stars = [];
-    this.lastW = w;
-    this.lastH = h;
-    const starCount = Math.max(50, Math.min(160, Math.floor((w * h) / 8000)));
-    for (let i = 0; i < starCount; i++) {
-      this.stars.push({
-        x: Math.random() * w,
-        y: Math.random() * h,
-        r: Math.random() * 1.15 + 0.12,
-        a: Math.random() * 0.6 + 0.1,
-        tw: Math.random() * 0.01 + 0.002,
-        dir: Math.random() > 0.5 ? 1 : -1
-      });
+/* Render quality: phones fill far fewer pixels, and the game quietly lowers its
+   resolution if the device can't keep up (so it never turns into a slideshow). */
+const Quality = (function () {
+  const coarse = window.matchMedia('(hover: none), (pointer: coarse)').matches;
+  const MIN = 0.8;
+  let dpr = Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
+  let acc = 0, n = 0, cooldown = 1;
+  const listeners = [];
+  return {
+    get dpr() { return dpr; },
+    onChange(fn) { listeners.push(fn); },
+    /* feed the gap between two rendered frames (ms) */
+    frame(dtMs) {
+      if (!coarse) return;                        // desktops keep full sharpness
+      if (!(dtMs > 0) || dtMs > 250) return;      // tab was hidden / paused
+      acc += dtMs; n++;
+      if (n < 40) return;
+      const avg = acc / n; acc = 0; n = 0;
+      if (cooldown > 0) { cooldown--; return; }
+      if (avg > 24 && dpr > MIN + 0.01) {         // slower than ~40fps -> fewer pixels
+        dpr = Math.max(MIN, dpr * 0.8);
+        cooldown = 2;
+        listeners.forEach(f => { try { f(); } catch (_) {} });
+      }
     }
-    this.bake(w, h);
-    this.initialized = true;
-  },
+  };
+})();
 
-  bake(w, h) {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const make = () => {
-      const c = document.createElement('canvas');
-      c.width = Math.max(1, Math.floor(w * dpr));
-      c.height = Math.max(1, Math.floor(h * dpr));
-      const x = c.getContext('2d');
-      x.setTransform(dpr, 0, 0, dpr, 0, 0);
-      return [c, x];
+const CosmicBackground = {
+  /* The black hole + stars never move, so they are painted ONCE into their own
+     canvas that sits behind the game canvas. The browser just composites it —
+     no full-screen redraw every frame. A few stars still twinkle on the game canvas. */
+  attach(gameCanvas) {
+    const el = document.createElement('canvas');
+    el.className = 'bg-canvas';
+    el.setAttribute('aria-hidden', 'true');
+    gameCanvas.parentNode.insertBefore(el, gameCanvas);
+    const bctx = el.getContext('2d');
+    const self = this;
+    let twinkle = [];
+    return {
+      resize(w, h, dpr) {
+        el.width = Math.max(1, Math.floor(w * dpr));
+        el.height = Math.max(1, Math.floor(h * dpr));
+        bctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        self.paintBase(bctx, w, h);
+        const count = Math.max(50, Math.min(160, Math.floor((w * h) / 8000)));
+        for (let i = 0; i < count; i++) {
+          bctx.fillStyle = 'rgba(210, 220, 240, ' + (Math.random() * 0.55 + 0.1).toFixed(2) + ')';
+          bctx.beginPath();
+          bctx.arc(Math.random() * w, Math.random() * h, Math.random() * 1.15 + 0.12, 0, Math.PI * 2);
+          bctx.fill();
+        }
+        self.paintHole(bctx, w, h);
+        // twinkling stars stay clear of the black hole
+        const holeR = Math.min(w, h) * 0.125;
+        twinkle = [];
+        while (twinkle.length < 14) {
+          const x = Math.random() * w, y = Math.random() * h;
+          if (Math.hypot(x - w / 2, y - h / 2) < holeR * 4.2) continue;
+          twinkle.push({ x, y, r: Math.random() * 0.9 + 0.5, a: Math.random() * 0.6 + 0.1, tw: Math.random() * 0.012 + 0.004, dir: Math.random() > 0.5 ? 1 : -1 });
+        }
+      },
+      twinkle(ctx) {
+        for (const s of twinkle) {
+          s.a += s.tw * s.dir;
+          if (s.a > 0.85 || s.a < 0.05) s.dir *= -1;
+          ctx.fillStyle = 'rgba(225, 232, 250, ' + s.a.toFixed(2) + ')';
+          ctx.beginPath();
+          ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
     };
-    const [bc, bx] = make();
-    this.paintBase(bx, w, h);
-    this.baseLayer = bc;
-    const [hc, hx] = make();
-    this.paintHole(hx, w, h);
-    this.holeLayer = hc;
   },
 
   paintBase(ctx, w, h) {
@@ -2530,25 +2571,6 @@ const CosmicBackground = {
     ctx.beginPath();
     ctx.arc(cx, cy, holeR * 0.62, 0, Math.PI * 2);
     ctx.stroke();
-  },
-
-  draw(ctx, w, h, time) {
-    if (!this.initialized || this.lastW !== w || this.lastH !== h) this.init(w, h);
-
-    // Static layers are pre-rendered once (the glow effects are expensive on phones)
-    ctx.drawImage(this.baseLayer, 0, 0, w, h);
-
-    // Distant stars (cheap, twinkle every frame)
-    for (const s of this.stars) {
-      s.a += s.tw * s.dir;
-      if (s.a > 0.75 || s.a < 0.05) s.dir *= -1;
-      ctx.fillStyle = `rgba(210, 220, 240, ${s.a})`;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
-    ctx.drawImage(this.holeLayer, 0, 0, w, h);
   }
 };
 
@@ -2580,7 +2602,8 @@ const PongPhysics = {
 
   serve(ball, W, H, speed) {
     const dir = Math.random() < 0.5 ? -1 : 1;
-    const a = (Math.random() * 2 - 1) * 0.55;
+    // always shot at an angle (17°–46° up or down) — never a flat horizontal line
+    const a = (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 0.5);
     ball.x = W / 2;
     ball.y = H / 2;
     ball.vx = Math.cos(a) * speed * dir;
@@ -2589,20 +2612,30 @@ const PongPhysics = {
 
   speed(ball) { return Math.hypot(ball.vx, ball.vy); },
 
-  _bounce(ball, padY, dir) {
-    const rel = Math.max(-1, Math.min(1, (ball.y - (padY + this.PADDLE_H / 2)) / (this.PADDLE_H / 2)));
+  /* Where the ball meets the paddle (and how fast the paddle is moving) decides
+     the exit angle. Hits are never flat: the minimum is ~13°. */
+  _bounce(ball, padY, dir, padVel) {
+    const half = this.PADDLE_H / 2 + this.BALL_R;
+    const rel = Math.max(-1, Math.min(1, (ball.y - (padY + this.PADDLE_H / 2)) / half));
     const sp = Math.min(this.MAX, this.speed(ball) * this.HIT_BOOST);
-    const ang = rel * 0.85;
+    let ang = rel * 0.85 + Math.max(-0.4, Math.min(0.4, (padVel || 0) * 0.03)) + (Math.random() - 0.5) * 0.1;
+    if (Math.abs(ang) < 0.22) ang = (ang === 0 ? (Math.random() < 0.5 ? -1 : 1) : Math.sign(ang)) * 0.22;
+    ang = Math.max(-1.05, Math.min(1.05, ang));
     ball.vx = dir * Math.cos(ang) * sp;
     ball.vy = Math.sin(ang) * sp;
   },
 
   /* Advance the ball by dtf frames. Returns events:
      {t:'paddle', side:'left'|'right'}, {t:'wall'}, {t:'score', side:<who scored>}.
-     opts.noScore: used by a client that only predicts — the host decides points. */
+     opts.noScore: used by a client that only predicts — the host decides points.
+     opts.leftVel/rightVel: paddle speed (px/frame) — a moving paddle steers the ball.
+     opts.leftSpan/rightSpan: [lo, hi] range of paddle-top positions that count as
+       "there" (used online to forgive network delay). Defaults to the exact paddle. */
   step(ball, dtf, W, H, leftY, rightY, opts) {
     const ev = [];
     const R = this.BALL_R, PW = this.PADDLE_W, PH = this.PADDLE_H, PX = this.PAD_X;
+    const lSpan = (opts && opts.leftSpan) || [leftY, leftY];
+    const rSpan = (opts && opts.rightSpan) || [rightY, rightY];
     const n = Math.max(1, Math.ceil(dtf));
     const h = dtf / n;
     for (let i = 0; i < n; i++) {
@@ -2623,10 +2656,11 @@ const PongPhysics = {
       if (ball.vx < 0 && px - R >= frontL - 0.5 && ball.x - R <= frontL) {
         const f = Math.min(1, Math.max(0, (px - R - frontL) / ((px - R) - (ball.x - R) || 1)));
         const yc = py + (ball.y - py) * f;
-        if (yc >= leftY - R * 0.4 && yc <= leftY + PH + R * 0.4) {
+        // any overlap of the ball's circle with the paddle counts as a hit
+        if (yc >= lSpan[0] - R && yc <= lSpan[1] + PH + R) {
           ball.x = frontL + R;
           ball.y = yc;
-          this._bounce(ball, leftY, 1);
+          this._bounce(ball, Math.max(lSpan[0], Math.min(lSpan[1], yc - PH / 2)), 1, opts && opts.leftVel);
           ev.push({ t: 'paddle', side: 'left' });
         }
       }
@@ -2634,10 +2668,10 @@ const PongPhysics = {
       if (ball.vx > 0 && px + R <= frontR + 0.5 && ball.x + R >= frontR) {
         const f = Math.min(1, Math.max(0, (frontR - (px + R)) / ((ball.x + R) - (px + R) || 1)));
         const yc = py + (ball.y - py) * f;
-        if (yc >= rightY - R * 0.4 && yc <= rightY + PH + R * 0.4) {
+        if (yc >= rSpan[0] - R && yc <= rSpan[1] + PH + R) {
           ball.x = frontR - R;
           ball.y = yc;
-          this._bounce(ball, rightY, -1);
+          this._bounce(ball, Math.max(rSpan[0], Math.min(rSpan[1], yc - PH / 2)), -1, opts && opts.rightVel);
           ev.push({ t: 'paddle', side: 'right' });
         }
       }
@@ -2661,6 +2695,7 @@ const PongPhysics = {
   const resultText = document.getElementById('singleResult');
   const scoreDisplay = document.getElementById('singleScoreDisplay');
   const restartBtn = document.getElementById('singleRestartBtn');
+  const bg = CosmicBackground.attach(canvas);
 
   let W = canvas.width, H = canvas.height;
   const PADDLE_W = 8, PADDLE_H = 110, BALL_R = 9;
@@ -2680,10 +2715,17 @@ const PongPhysics = {
   let time = 0;
   let gameSec = 0;          // seconds of play — drives the speed-up
   let lastFrame = performance.now();
+  let lastPlayerY = 0, lastAiY = 0;   // for paddle speed (steers the ball)
 
-  function resizeCanvas() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let dimsKey = '', canvasRect = null;
+  function resizeCanvas(force) {
+    const dpr = Quality.dpr;
     const size = getGameSize();
+    const key = size.w + 'x' + size.h + '@' + dpr;
+    // Phones fire resize/scroll events constantly (address bar, touch). Re-creating the
+    // canvas every time is what makes the game hitch — only do it when the size changed.
+    if (!force && key === dimsKey) { canvasRect = canvas.getBoundingClientRect(); return; }
+    dimsKey = key;
     W = size.w;
     H = size.h;
     canvas.width = Math.floor(W * dpr);
@@ -2693,8 +2735,10 @@ const PongPhysics = {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     playerY = Math.max(0, Math.min(H - PADDLE_H, playerY));
     aiY = Math.max(0, Math.min(H - PADDLE_H, aiY));
-    CosmicBackground.init(W, H);
+    bg.resize(W, H, dpr);
+    canvasRect = canvas.getBoundingClientRect();
   }
+  Quality.onChange(() => { if (currentScreen === 'single') resizeCanvas(true); });
 
   function resetBall() {
     PongPhysics.serve(ball, W, H, PongPhysics.serveSpeed(gameSec));
@@ -2708,13 +2752,13 @@ const PongPhysics = {
     gameSec = 0;
     playerY = (H - PADDLE_H) / 2;
     aiY = (H - PADDLE_H) / 2;
+    lastPlayerY = playerY; lastAiY = aiY;
     resetBall();
     overlay.classList.remove('visible');
     running = true;
     shakeTime = 0;
     flashAlpha = 0;
     lastFrame = performance.now();
-    CosmicBackground.init(W, H);
     GameAudio.startMusic();
   }
 
@@ -2814,6 +2858,7 @@ const PongPhysics = {
   }
 
   function draw() {
+    ctx.clearRect(0, 0, W, H);
     ctx.save();
     if (shakeTime > 0) {
       const shake = shakeTime * 8;
@@ -2823,7 +2868,7 @@ const PongPhysics = {
       );
     }
 
-    CosmicBackground.draw(ctx, W, H, time);
+    bg.twinkle(ctx);
 
     if (flashAlpha > 0) {
       ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`;
@@ -2888,7 +2933,11 @@ const PongPhysics = {
     trail.push({ x: ball.x, y: ball.y });
     if (trail.length > 12) trail.shift();
 
-    const events = PongPhysics.step(ball, dtf, W, H, playerY, aiY);
+    const events = PongPhysics.step(ball, dtf, W, H, playerY, aiY, {
+      leftVel: (playerY - lastPlayerY) / dtf,
+      rightVel: (aiY - lastAiY) / dtf
+    });
+    lastPlayerY = playerY; lastAiY = aiY;
     const speedNow = PongPhysics.speed(ball);
     GameAudio.setIntensity(speedNow / PongPhysics.BASE);
 
@@ -2926,19 +2975,22 @@ const PongPhysics = {
 
   function gameLoop(now) {
     now = now || performance.now();
+    requestAnimationFrame(gameLoop);
+    // nothing to simulate or paint while another screen is showing
+    if (currentScreen !== 'single') { lastFrame = now; return; }
+    Quality.frame(now - lastFrame);
     const dtf = Math.min(2.5, Math.max(0.1, (now - lastFrame) / 16.6667));
     lastFrame = now;
     update(dtf);
     draw();
-    requestAnimationFrame(gameLoop);
   }
 
   // Touch / pointer control for mobile
   const singleTouchZone = document.getElementById('singleTouchZone');
   let spTouchActive = false;
   function spPointerToY(clientY) {
-    const rect = canvas.getBoundingClientRect();
-    const y = ((clientY - rect.top) / rect.height) * H;
+    const rect = canvasRect || (canvasRect = canvas.getBoundingClientRect());
+    const y = ((clientY - rect.top) / (rect.height || H)) * H;
     return Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2));
   }
   function spOnDown(e) {
@@ -3165,6 +3217,9 @@ const PongPhysics = {
   sessionStorage.setItem('orbit_pid', playerId);
   let gameLoopId = null;
   let onlineGameCleanup = null;
+  let onlineBg = null;          // one background layer, reused by every match
+  let onlineRelayout = null;
+  Quality.onChange(() => { if (onlineRelayout && currentScreen === 'onlineGame') onlineRelayout(); });
 
   function getClient() {
     if (supabase) return supabase;
@@ -3379,6 +3434,8 @@ const PongPhysics = {
     const oppNameDisplay = document.getElementById('oppNameDisplay');
     const touchZone = document.getElementById('onlineTouchZone');
     const touchHint = document.querySelector('[data-screen="onlineGame"] .touch-hint');
+    if (!onlineBg) onlineBg = CosmicBackground.attach(canvas);
+    const bg = onlineBg;
 
     const P = PongPhysics;
     /* Every device plays on the SAME logical court. Each screen just scales it
@@ -3409,6 +3466,9 @@ const PongPhysics = {
     let seq = 0, lastSeq = -1, lastStateSent = 0, evSinceSend = false, synced = false;
     let inputDirty = false, lastInputSent = 0, lastSentY = -1;
     let oneWay = 0.04, pingMs = null, pingTimer = null;
+    // lag compensation
+    let predBounceUntil = 0, predBounceSign = 0;   // guest predicted a bounce; ignore older host states
+    let hostOneWay = 0.06, oppHist = [], lastL = null, lastLt = 0, lastMyY = 0, lastOppY = 0;
 
     function updateStatus() {
       if (!roomStatus) return;
@@ -3418,9 +3478,13 @@ const PongPhysics = {
 
     /* ---------- view: fit the logical court to this screen ---------- */
     let W = 0, H = 0, portrait = false, scale = 1, offX = 0, offY = 0;
-    function layout() {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    let dimsKey = '', canvasRect = null;
+    function layout(force) {
+      const dpr = Quality.dpr;
       const size = getGameSize();
+      const key = size.w + 'x' + size.h + '@' + dpr;
+      if (!force && key === dimsKey) { canvasRect = canvas.getBoundingClientRect(); return; }
+      dimsKey = key;
       W = size.w; H = size.h;
       canvas.width = Math.floor(W * dpr);
       canvas.height = Math.floor(H * dpr);
@@ -3432,7 +3496,8 @@ const PongPhysics = {
       scale = Math.min(W / cw, H / ch);
       offX = (W - cw * scale) / 2;
       offY = (H - ch * scale) / 2;
-      CosmicBackground.init(W, H);
+      bg.resize(W, H, dpr);
+      canvasRect = canvas.getBoundingClientRect();
       if (touchHint) touchHint.textContent = portrait ? 'Slide left / right to move paddle' : 'Drag up / down to move paddle';
     }
     /* Portrait phones turn the court so that YOUR paddle is at the bottom. */
@@ -3443,7 +3508,7 @@ const PongPhysics = {
     }
     const clampY = (y) => Math.max(0, Math.min(LH - PH, y));
     function pointerToY(cx, cy) {
-      const rect = canvas.getBoundingClientRect();
+      const rect = canvasRect || (canvasRect = canvas.getBoundingClientRect());
       const px = (cx - rect.left) * (W / (rect.width || W));
       const py = (cy - rect.top) * (H / (rect.height || H));
       let ly;
@@ -3474,7 +3539,7 @@ const PongPhysics = {
       if (!conn.channel || host) return;
       lastInputSent = now;
       inputDirty = false;
-      conn.channel.send({ type: 'broadcast', event: 'input', payload: { y: r2(myY) } });
+      conn.channel.send({ type: 'broadcast', event: 'input', payload: { y: r2(myY), p: pingMs == null ? 0 : Math.round(pingMs) } });
     }
 
     conn.channel.on('broadcast', { event: 'state' }, ({ payload: p }) => {
@@ -3490,19 +3555,47 @@ const PongPhysics = {
       if (p.rs > myScore) { GameAudio.score(true); flashAlpha = 0.3; }
       else if (p.ls > oppScore) { GameAudio.score(false); flashAlpha = 0.3; }
       myScore = p.rs; oppScore = p.ls;
-      oppTarget = p.l;
-
-      // Ball: jump ahead by the network delay, then glide onto the host's truth
-      const lead = oneWay * 60;
-      const bx = p.b[0] + p.b[2] * lead;
-      const by = Math.max(ball.r, Math.min(LH - ball.r, p.b[1] + p.b[3] * lead));
-      if (!synced || p.ev || Math.hypot(bx - ball.x, by - ball.y) > 50) {
-        ball.x = bx; ball.y = by; synced = true;
-      } else {
-        ball.x += (bx - ball.x) * 0.4;
-        ball.y += (by - ball.y) * 0.4;
+      {
+        const t = performance.now();
+        let ahead = 0;
+        if (lastL != null && t - lastLt > 5 && t - lastLt < 250) {
+          ahead = Math.max(-100, Math.min(100, ((p.l - lastL) / (t - lastLt)) * oneWay * 1000 * 0.8));
+        }
+        lastL = p.l; lastLt = t;
+        oppTarget = clampY(p.l + ahead);
       }
-      ball.vx = p.b[2]; ball.vy = p.b[3];
+
+      // Ball: jump ahead by the network delay, then glide onto the host's truth.
+      // Right after WE predicted a bounce, a host state that still shows the ball
+      // heading the old way is simply out of date — skip it, or the ball would be
+      // dragged back into the paddle.
+      const outdated = performance.now() < predBounceUntil && Math.sign(p.b[2]) !== predBounceSign;
+      if (!outdated) {
+        predBounceUntil = 0;
+        // Move the host's ball forward by the network delay using the REAL physics.
+        // A straight-line jump could hop over the face of my paddle (ball "goes
+        // through"); stepping it forward sees the bounce off my paddle or a wall.
+        const t = { x: p.b[0], y: p.b[1], vx: p.b[2], vy: p.b[3] };
+        const lead = Math.min(0.25, oneWay) * 60;
+        const evs = lead > 0.05
+          ? P.step(t, lead, LW, LH, oppY, myY, { noScore: true, leftSpan: [oppY - 10, oppY + 10] })
+          : [];
+        const myHit = evs.some(e => e.t === 'paddle' && e.side === myRole);
+        if (!synced || p.ev || myHit || Math.hypot(t.x - ball.x, t.y - ball.y) > 50) {
+          ball.x = t.x; ball.y = t.y; synced = true;
+        } else {
+          ball.x += (t.x - ball.x) * 0.4;
+          ball.y += (t.y - ball.y) * 0.4;
+        }
+        ball.vx = t.vx; ball.vy = t.vy;
+        if (myHit) {
+          spawnParticles(ball.x, ball.y, myRole === 'left' ? '255, 50, 50' : '50, 100, 255');
+          shakeTime = 0.25;
+          GameAudio.hit(myRole, P.speed(ball) / P.BASE);
+          predBounceUntil = performance.now() + 300;
+          predBounceSign = Math.sign(ball.vx);
+        }
+      }
 
       if (p.run === false && running) endGame();
     });
@@ -3510,6 +3603,10 @@ const PongPhysics = {
     conn.channel.on('broadcast', { event: 'input' }, ({ payload }) => {
       if (!host || !payload || typeof payload.y !== 'number') return;
       oppTarget = clampY(payload.y);
+      const t = performance.now();
+      oppHist.push({ t, y: oppTarget });
+      if (oppHist.length > 12) oppHist.shift();
+      if (payload.p > 0) hostOneWay = Math.max(0.02, Math.min(0.3, payload.p / 2000));
     });
     conn.channel.on('broadcast', { event: 'restart' }, () => { if (!host) startRound(); });
     conn.channel.on('broadcast', { event: 'rematch' }, () => { if (host && !running) restartHost(); });
@@ -3535,6 +3632,7 @@ const PongPhysics = {
     function startRound() {
       myScore = 0; oppScore = 0; gameSec = 0; recorded = false; synced = false;
       myY = oppY = oppTarget = (LH - PH) / 2;
+      lastMyY = myY; lastOppY = oppY; lastL = null; oppHist = [];
       trail = []; particles = []; shakeTime = 0; flashAlpha = 0;
       overlay.classList.remove('visible');
       restartBtn.style.display = 'none';
@@ -3639,6 +3737,26 @@ const PongPhysics = {
       ctx.shadowBlur = 0;
     }
 
+    /* The host only knows where the guest's paddle was one network trip ago. So it
+       treats the guest paddle as covering the spot it was just seen at AND where
+       it is probably heading — that way a ball that visibly touches the guest's
+       paddle on the guest's own screen is never counted as a miss. */
+    function guestSpan(now) {
+      let lo = oppY, hi = oppY;
+      const window = 120 + hostOneWay * 1000;
+      for (const h of oppHist) if (now - h.t <= window) { lo = Math.min(lo, h.y); hi = Math.max(hi, h.y); }
+      const n = oppHist.length;
+      if (n >= 2) {
+        const a = oppHist[n - 2], b = oppHist[n - 1], dt = b.t - a.t;
+        if (dt > 5 && dt < 250) {
+          const guess = clampY(b.y + ((b.y - a.y) / dt) * hostOneWay * 1000 * 0.9);
+          lo = Math.min(lo, guess); hi = Math.max(hi, guess);
+        }
+      }
+      const slack = 10 + hostOneWay * 250;           // a laggier connection forgives a little more
+      return [clampY(lo - slack), clampY(hi + slack)];
+    }
+
     /* ---------- simulation ---------- */
     function handleEvents(evs, authoritative) {
       for (const e of evs) {
@@ -3652,6 +3770,7 @@ const PongPhysics = {
           shakeTime = 0.25;
           GameAudio.hit(e.side, spd);
           evSinceSend = true;
+          if (!authoritative) { predBounceUntil = performance.now() + 300; predBounceSign = Math.sign(ball.vx); }
         } else if (e.t === 'score' && authoritative) {
           flashAlpha = 0.3;
           evSinceSend = true;
@@ -3690,23 +3809,29 @@ const PongPhysics = {
 
       if (host) {
         gameSec += dtf / 60;
-        handleEvents(P.step(ball, dtf, LW, LH, myY, oppY), true);
+        handleEvents(P.step(ball, dtf, LW, LH, myY, oppY, {
+          rightSpan: guestSpan(now),
+          leftVel: (myY - lastMyY) / dtf,
+          rightVel: (oppY - lastOppY) / dtf
+        }), true);
+        lastMyY = myY; lastOppY = oppY;
         if (running && (now - lastStateSent >= SEND_MS || (evSinceSend && now - lastStateSent >= 16))) sendState();
       } else {
         // the guest predicts the ball between host updates, so motion stays smooth
-        handleEvents(P.step(ball, dtf, LW, LH, oppY, myY, { noScore: true }), false);
+        handleEvents(P.step(ball, dtf, LW, LH, oppY, myY, { noScore: true, leftSpan: [oppY - 10, oppY + 10] }), false);
         if (inputDirty && now - lastInputSent >= SEND_MS) sendInput(now);
       }
       GameAudio.setIntensity(P.speed(ball) / P.BASE);
     }
 
     function draw() {
+      ctx.clearRect(0, 0, W, H);
       ctx.save();
       if (shakeTime > 0) {
         const sh = shakeTime * 8;
         ctx.translate((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh);
       }
-      CosmicBackground.draw(ctx, W, H, time);
+      bg.twinkle(ctx);
       if (flashAlpha > 0) {
         ctx.fillStyle = `rgba(255,255,255,${flashAlpha})`;
         ctx.fillRect(0, 0, W, H);
@@ -3743,6 +3868,7 @@ const PongPhysics = {
     function loop(now) {
       if (closed) return;
       now = now || performance.now();
+      Quality.frame(now - lastFrame);
       const dtf = Math.min(2.5, Math.max(0.1, (now - lastFrame) / 16.6667));
       lastFrame = now;
       tick(dtf, now);
@@ -3791,6 +3917,7 @@ const PongPhysics = {
     });
 
     const onResize = () => { if (currentScreen === 'onlineGame') layout(); };
+    onlineRelayout = () => layout(true);
     const onOrient = () => setTimeout(onResize, 250);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -3812,6 +3939,7 @@ const PongPhysics = {
 
     onlineGameCleanup = () => {
       closed = true;
+      onlineRelayout = null;
       clearInterval(pingTimer);
       GameAudio.stopMusic();
       window.removeEventListener('keydown', onKeyDown);
