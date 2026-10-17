@@ -1144,8 +1144,9 @@
   }
 
   .room-status {
+    white-space: nowrap;
     position: absolute;
-    top: 12px;
+    top: 44px;
     left: 50%;
     transform: translateX(-50%);
     font-family: 'Orbitron', monospace;
@@ -1378,6 +1379,29 @@
     text-transform: uppercase;
     color: #6a7ba8;
   }
+  .sound-btn {
+    position: fixed;
+    top: max(12px, env(safe-area-inset-top, 12px));
+    right: max(12px, env(safe-area-inset-right, 12px));
+    width: 40px;
+    height: 40px;
+    z-index: 9000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border-radius: 12px;
+    background: rgba(0, 0, 0, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #dbe4ff;
+    backdrop-filter: blur(8px);
+    cursor: pointer;
+  }
+  body.game-playing .sound-btn { display: flex; }
+  .sound-btn svg { width: 20px; height: 20px; }
+  .sound-btn .off { display: none; }
+  .sound-btn.muted .on { display: none; }
+  .sound-btn.muted .off { display: block; }
   .history-table .opp-row { cursor: pointer; }
   .history-table .opp-row:hover td { background: rgba(50, 75, 150, 0.1); }
   .history-table .pts-cell { white-space: nowrap; }
@@ -1863,8 +1887,178 @@
   </div>
 </div>
 
+<button class="sound-btn" id="soundBtn" type="button" aria-label="Toggle sound">
+  <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
+  <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="m22 9-6 6M16 9l6 6"/></svg>
+</button>
+
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
+/* ================= Game audio (procedural WebAudio — no files) ================= */
+const GameAudio = (function () {
+  let ctx = null, master = null, musicBus = null, sfxBus = null, noiseBuf = null;
+  let muted = false;
+  try { muted = localStorage.getItem('orbit_muted') === '1'; } catch (_) {}
+  let musicOn = false, schedTimer = null, nextStepTime = 0, stepIdx = 0, bpm = 120, intensity = 1;
+
+  function ensure() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      try { ctx = new AC({ latencyHint: 'interactive' }); } catch (_) { return null; }
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -14; comp.ratio.value = 6;
+      comp.attack.value = 0.003; comp.release.value = 0.2;
+      master = ctx.createGain(); master.gain.value = muted ? 0 : 0.8;
+      musicBus = ctx.createGain(); musicBus.gain.value = 0.2;
+      sfxBus = ctx.createGain(); sfxBus.gain.value = 0.9;
+      musicBus.connect(master); sfxBus.connect(master);
+      master.connect(comp); comp.connect(ctx.destination);
+      noiseBuf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ctx.state === 'suspended') { try { ctx.resume(); } catch (_) {} }
+    return ctx;
+  }
+
+  function tone(type, freq, t, dur, vol, bus, o) {
+    o = o || {};
+    const osc = ctx.createOscillator(), g = ctx.createGain();
+    osc.type = type;
+    osc.frequency.setValueAtTime(freq, t);
+    if (o.slideTo) osc.frequency.exponentialRampToValueAtTime(o.slideTo, t + dur);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    if (o.filter) {
+      const f = ctx.createBiquadFilter();
+      f.type = 'lowpass'; f.frequency.value = o.filter;
+      osc.connect(f); f.connect(g);
+    } else osc.connect(g);
+    g.connect(bus);
+    osc.start(t); osc.stop(t + dur + 0.03);
+  }
+
+  function noise(t, dur, vol, bus, hp) {
+    const src = ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+    src.buffer = noiseBuf;
+    f.type = 'highpass'; f.frequency.value = hp || 2000;
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(bus);
+    src.start(t, Math.random() * 0.5); src.stop(t + dur + 0.02);
+  }
+
+  /* ---------- sound effects ---------- */
+  function hit(side, mul) {
+    if (!ensure()) return;
+    const t = ctx.currentTime;
+    const base = (side === 'left' ? 440 : 554) * (1 + ((mul || 1) - 1) * 0.3);
+    tone('square', base, t, 0.09, 0.32, sfxBus, { slideTo: base * 0.5, filter: 3200 });
+    tone('sine', base / 2, t, 0.13, 0.55, sfxBus, { slideTo: base / 4 });
+    noise(t, 0.04, 0.3, sfxBus, 1500);
+  }
+  function wall() {
+    if (!ensure()) return;
+    const t = ctx.currentTime;
+    tone('triangle', 260, t, 0.07, 0.3, sfxBus, { slideTo: 170 });
+  }
+  function arp(notes, gap, type, vol, len) {
+    if (!ensure()) return;
+    const t = ctx.currentTime;
+    notes.forEach((f, i) => tone(type, f, t + i * gap, len, vol, sfxBus, { filter: 2800 }));
+  }
+  function score(mine) {
+    if (mine) arp([523.25, 659.25, 783.99, 1046.5], 0.07, 'sawtooth', 0.22, 0.22);
+    else arp([392, 329.63, 261.63, 196], 0.09, 'sawtooth', 0.22, 0.26);
+  }
+  function win()  { arp([523.25, 659.25, 783.99, 1046.5, 1318.5, 1568], 0.11, 'square', 0.2, 0.4); }
+  function lose() { arp([392, 369.99, 329.63, 261.63, 196], 0.2, 'sawtooth', 0.2, 0.45); }
+
+  /* ---------- music: 4-bar Am–F–C–G loop, tempo follows the ball speed ---------- */
+  const BASS = [55, 43.65, 65.41, 49];
+  const ARP = [
+    [440, 523.25, 659.25, 523.25],
+    [349.23, 440, 523.25, 440],
+    [523.25, 659.25, 783.99, 659.25],
+    [392, 493.88, 587.33, 493.88]
+  ];
+  function kick(t) {
+    tone('sine', 150, t, 0.16, 0.95, musicBus, { slideTo: 42 });
+  }
+  function snare(t) {
+    noise(t, 0.13, 0.5, musicBus, 1800);
+    tone('triangle', 210, t, 0.09, 0.3, musicBus, { slideTo: 140 });
+  }
+  function scheduleStep(i, t) {
+    const bar = (i >> 4) & 3, s = i & 15;
+    const stepDur = 60 / bpm / 4;
+    const hot = intensity > 1.5;
+    if (s % 4 === 0) kick(t);
+    if (s === 4 || s === 12) snare(t);
+    if (s % 4 === 2) noise(t, 0.035, 0.18, musicBus, 7000);
+    else if (hot && s % 2 === 1) noise(t, 0.025, 0.08, musicBus, 8000);
+    if (s % 2 === 0) {
+      const root = BASS[bar] * (s % 4 === 2 ? 2 : 1);
+      tone('sawtooth', root, t, stepDur * 1.8, 0.5, musicBus, { filter: 650 });
+      tone('square', ARP[bar][(s >> 1) & 3], t, stepDur * 1.6, 0.14, musicBus, { filter: 2600 });
+    } else if (hot) {
+      tone('square', ARP[bar][(s >> 1) & 3] * 2, t, stepDur * 0.9, 0.06, musicBus, { filter: 3200 });
+    }
+  }
+  function pump() {
+    if (!musicOn || !ctx) return;
+    bpm = 118 + Math.min(1.4, Math.max(0, intensity - 1)) * 50;
+    const stepLen = () => 60 / bpm / 4;
+    while (nextStepTime < ctx.currentTime + 0.15) {
+      scheduleStep(stepIdx++, nextStepTime);
+      nextStepTime += stepLen();
+    }
+  }
+  function startMusic() {
+    if (!ensure() || musicOn) return;
+    musicOn = true;
+    stepIdx = 0;
+    nextStepTime = ctx.currentTime + 0.08;
+    clearInterval(schedTimer);
+    schedTimer = setInterval(pump, 30);
+    pump();
+  }
+  function stopMusic() {
+    musicOn = false;
+    clearInterval(schedTimer);
+    schedTimer = null;
+  }
+  function setIntensity(v) { intensity = v; }
+
+  /* ---------- mute button ---------- */
+  function paintBtn() {
+    const b = document.getElementById('soundBtn');
+    if (b) b.classList.toggle('muted', muted);
+  }
+  function setMuted(m) {
+    muted = m;
+    try { localStorage.setItem('orbit_muted', m ? '1' : '0'); } catch (_) {}
+    if (ctx && master) master.gain.setTargetAtTime(m ? 0 : 0.8, ctx.currentTime, 0.02);
+    paintBtn();
+  }
+  const btn = document.getElementById('soundBtn');
+  if (btn) btn.addEventListener('click', () => { ensure(); setMuted(!muted); });
+  paintBtn();
+
+  // Browsers only allow sound after a user gesture — unlock on the first one.
+  ['pointerdown', 'touchend', 'click', 'keydown'].forEach(ev =>
+    window.addEventListener(ev, ensure, { capture: true, passive: true }));
+  document.addEventListener('visibilitychange', () => {
+    if (!ctx) return;
+    if (document.hidden) { try { ctx.suspend(); } catch (_) {} }
+    else { try { ctx.resume(); } catch (_) {} }
+  });
+
+  return { hit, wall, score, win, lose, startMusic, stopMusic, setIntensity, unlock: ensure };
+})();
+
 /* ================= Custom cursor ================= */
 (function customCursor() {
   const cursor = document.getElementById('cursor');
@@ -2135,6 +2329,9 @@ function show(name) {
     window.gameConnection = null;
   }
 
+  if (name !== 'single' && window.singlePlayerGame) window.singlePlayerGame.stop();
+  if (name !== 'single' && name !== 'onlineGame') GameAudio.stopMusic();
+
   if (name === 'single' && window.singlePlayerGame) {
     window.singlePlayerGame.start();
   }
@@ -2215,12 +2412,29 @@ const CosmicBackground = {
         dir: Math.random() > 0.5 ? 1 : -1
       });
     }
+    this.bake(w, h);
     this.initialized = true;
   },
 
-  draw(ctx, w, h, time) {
-    if (!this.initialized || this.lastW !== w || this.lastH !== h) this.init(w, h);
+  bake(w, h) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const make = () => {
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.floor(w * dpr));
+      c.height = Math.max(1, Math.floor(h * dpr));
+      const x = c.getContext('2d');
+      x.setTransform(dpr, 0, 0, dpr, 0, 0);
+      return [c, x];
+    };
+    const [bc, bx] = make();
+    this.paintBase(bx, w, h);
+    this.baseLayer = bc;
+    const [hc, hx] = make();
+    this.paintHole(hx, w, h);
+    this.holeLayer = hc;
+  },
 
+  paintBase(ctx, w, h) {
     // Pure black void
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, w, h);
@@ -2232,17 +2446,9 @@ const CosmicBackground = {
     haze.addColorStop(1, 'rgba(0, 0, 0, 0)');
     ctx.fillStyle = haze;
     ctx.fillRect(0, 0, w, h);
+  },
 
-    // Distant stars
-    for (const s of this.stars) {
-      s.a += s.tw * s.dir;
-      if (s.a > 0.75 || s.a < 0.05) s.dir *= -1;
-      ctx.fillStyle = `rgba(210, 220, 240, ${s.a})`;
-      ctx.beginPath();
-      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
-      ctx.fill();
-    }
-
+  paintHole(ctx, w, h) {
     // Black hole — Interstellar reference style
     const cx = w / 2;
     const cy = h / 2;
@@ -2324,6 +2530,124 @@ const CosmicBackground = {
     ctx.beginPath();
     ctx.arc(cx, cy, holeR * 0.62, 0, Math.PI * 2);
     ctx.stroke();
+  },
+
+  draw(ctx, w, h, time) {
+    if (!this.initialized || this.lastW !== w || this.lastH !== h) this.init(w, h);
+
+    // Static layers are pre-rendered once (the glow effects are expensive on phones)
+    ctx.drawImage(this.baseLayer, 0, 0, w, h);
+
+    // Distant stars (cheap, twinkle every frame)
+    for (const s of this.stars) {
+      s.a += s.tw * s.dir;
+      if (s.a > 0.75 || s.a < 0.05) s.dir *= -1;
+      ctx.fillStyle = `rgba(210, 220, 240, ${s.a})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, s.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    ctx.drawImage(this.holeLayer, 0, 0, w, h);
+  }
+};
+
+/* Small "SPEED ×1.8" readout drawn under the score (screen space) */
+function drawSpeedHud(ctx, W, mult, y) {
+  ctx.save();
+  ctx.font = '600 11px "Orbitron", system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.shadowBlur = 0;
+  const hot = Math.min(1, Math.max(0, (mult - 1) / 1.3));
+  ctx.fillStyle = 'rgba(' + Math.round(120 + 135 * hot) + ',' + Math.round(140 - 60 * hot) + ',' + Math.round(190 - 110 * hot) + ',0.85)';
+  ctx.fillText('SPEED ×' + mult.toFixed(1), W / 2, y || 74);
+  ctx.restore();
+}
+
+/* ================================================================
+   SHARED BALL PHYSICS — time-based, speeds up the longer you play
+   Units: pixels per "frame" at 60fps, so 60Hz and 120Hz screens play alike.
+   ================================================================ */
+const PongPhysics = {
+  PADDLE_H: 110, PADDLE_W: 8, BALL_R: 9, PAD_X: 28,
+  BASE: 6,            // starting ball speed
+  MAX: 14,            // top speed (still returnable with a 8px/frame paddle)
+  ACCEL: 0.3,         // extra speed per second while the ball is in play
+  HIT_BOOST: 1.04,    // extra speed on every paddle hit
+  WIN: 5,
+
+  serveSpeed(gameSec) { return Math.min(10, this.BASE + gameSec * 0.04); },
+
+  serve(ball, W, H, speed) {
+    const dir = Math.random() < 0.5 ? -1 : 1;
+    const a = (Math.random() * 2 - 1) * 0.55;
+    ball.x = W / 2;
+    ball.y = H / 2;
+    ball.vx = Math.cos(a) * speed * dir;
+    ball.vy = Math.sin(a) * speed;
+  },
+
+  speed(ball) { return Math.hypot(ball.vx, ball.vy); },
+
+  _bounce(ball, padY, dir) {
+    const rel = Math.max(-1, Math.min(1, (ball.y - (padY + this.PADDLE_H / 2)) / (this.PADDLE_H / 2)));
+    const sp = Math.min(this.MAX, this.speed(ball) * this.HIT_BOOST);
+    const ang = rel * 0.85;
+    ball.vx = dir * Math.cos(ang) * sp;
+    ball.vy = Math.sin(ang) * sp;
+  },
+
+  /* Advance the ball by dtf frames. Returns events:
+     {t:'paddle', side:'left'|'right'}, {t:'wall'}, {t:'score', side:<who scored>}.
+     opts.noScore: used by a client that only predicts — the host decides points. */
+  step(ball, dtf, W, H, leftY, rightY, opts) {
+    const ev = [];
+    const R = this.BALL_R, PW = this.PADDLE_W, PH = this.PADDLE_H, PX = this.PAD_X;
+    const n = Math.max(1, Math.ceil(dtf));
+    const h = dtf / n;
+    for (let i = 0; i < n; i++) {
+      const sp = Math.hypot(ball.vx, ball.vy);
+      if (sp > 0 && sp < this.MAX) {
+        const k = Math.min(this.MAX, sp + this.ACCEL * h / 60) / sp;
+        ball.vx *= k; ball.vy *= k;
+      }
+      const px = ball.x, py = ball.y;
+      ball.x += ball.vx * h;
+      ball.y += ball.vy * h;
+
+      if (ball.y - R < 0) { ball.y = R; ball.vy = Math.abs(ball.vy); ev.push({ t: 'wall' }); }
+      else if (ball.y + R > H) { ball.y = H - R; ball.vy = -Math.abs(ball.vy); ev.push({ t: 'wall' }); }
+
+      // Swept paddle checks: a fast ball can never jump over a paddle
+      const frontL = PX + PW;
+      if (ball.vx < 0 && px - R >= frontL - 0.5 && ball.x - R <= frontL) {
+        const f = Math.min(1, Math.max(0, (px - R - frontL) / ((px - R) - (ball.x - R) || 1)));
+        const yc = py + (ball.y - py) * f;
+        if (yc >= leftY - R * 0.4 && yc <= leftY + PH + R * 0.4) {
+          ball.x = frontL + R;
+          ball.y = yc;
+          this._bounce(ball, leftY, 1);
+          ev.push({ t: 'paddle', side: 'left' });
+        }
+      }
+      const frontR = W - PX - PW;
+      if (ball.vx > 0 && px + R <= frontR + 0.5 && ball.x + R >= frontR) {
+        const f = Math.min(1, Math.max(0, (frontR - (px + R)) / ((ball.x + R) - (px + R) || 1)));
+        const yc = py + (ball.y - py) * f;
+        if (yc >= rightY - R * 0.4 && yc <= rightY + PH + R * 0.4) {
+          ball.x = frontR - R;
+          ball.y = yc;
+          this._bounce(ball, rightY, -1);
+          ev.push({ t: 'paddle', side: 'right' });
+        }
+      }
+
+      if (!(opts && opts.noScore)) {
+        if (ball.x - R < 0) { ev.push({ t: 'score', side: 'right' }); break; }
+        if (ball.x + R > W) { ev.push({ t: 'score', side: 'left' }); break; }
+      }
+    }
+    return ev;
   }
 };
 
@@ -2354,6 +2678,8 @@ const CosmicBackground = {
   let shakeTime = 0;
   let flashAlpha = 0;
   let time = 0;
+  let gameSec = 0;          // seconds of play — drives the speed-up
+  let lastFrame = performance.now();
 
   function resizeCanvas() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -2371,10 +2697,7 @@ const CosmicBackground = {
   }
 
   function resetBall() {
-    ball.x = W / 2;
-    ball.y = H / 2;
-    ball.vx = (Math.random() > 0.5 ? 1 : -1) * 6;
-    ball.vy = (Math.random() * 4 - 2) * 2;
+    PongPhysics.serve(ball, W, H, PongPhysics.serveSpeed(gameSec));
     trail = [];
     particles = [];
   }
@@ -2382,6 +2705,7 @@ const CosmicBackground = {
   function resetGame() {
     playerScore = 0;
     aiScore = 0;
+    gameSec = 0;
     playerY = (H - PADDLE_H) / 2;
     aiY = (H - PADDLE_H) / 2;
     resetBall();
@@ -2389,7 +2713,9 @@ const CosmicBackground = {
     running = true;
     shakeTime = 0;
     flashAlpha = 0;
+    lastFrame = performance.now();
     CosmicBackground.init(W, H);
+    GameAudio.startMusic();
   }
 
   function start() {
@@ -2399,6 +2725,7 @@ const CosmicBackground = {
 
   function stop() {
     running = false;
+    GameAudio.stopMusic();
   }
 
   function spawnParticles(x, y, color) {
@@ -2509,6 +2836,7 @@ const CosmicBackground = {
     ctx.shadowBlur = 0;
     ctx.fillStyle = 'rgba(150, 155, 165, 0.9)';
     ctx.fillText(playerScore + ' - ' + aiScore, W / 2, 52);
+    drawSpeedHud(ctx, W, PongPhysics.speed(ball) / PongPhysics.BASE);
 
     for (const p of particles) {
       p.x += p.vx;
@@ -2534,89 +2862,55 @@ const CosmicBackground = {
     ctx.restore();
   }
 
-  function update() {
+  function update(dtf) {
     if (!running) return;
-    time += 0.016;
+    time += 0.016 * dtf;
+    gameSec += dtf / 60;
 
-    if (shakeTime > 0) shakeTime -= 0.05;
-    if (flashAlpha > 0) flashAlpha -= 0.05;
+    if (shakeTime > 0) shakeTime -= 0.05 * dtf;
+    if (flashAlpha > 0) flashAlpha -= 0.05 * dtf;
 
-    if (keys['w'] || keys['ArrowUp']) {
-      playerY = Math.max(0, playerY - PLAYER_SPEED);
+    if (keys['w'] || keys['W'] || keys['ArrowUp']) {
+      playerY = Math.max(0, playerY - PLAYER_SPEED * dtf);
     }
-    if (keys['s'] || keys['ArrowDown']) {
-      playerY = Math.min(H - PADDLE_H, playerY + PLAYER_SPEED);
+    if (keys['s'] || keys['S'] || keys['ArrowDown']) {
+      playerY = Math.min(H - PADDLE_H, playerY + PLAYER_SPEED * dtf);
     }
 
+    // The AI gets quicker as the game goes on, but never perfect
     const aiCenter = aiY + PADDLE_H / 2;
-    const ballCenter = ball.y;
-    const aiSpeed = 4.5;
-    if (Math.abs(aiCenter - ballCenter) > 10) {
-      if (aiCenter < ballCenter) {
-        aiY = Math.min(H - PADDLE_H, aiY + aiSpeed);
-      } else {
-        aiY = Math.max(0, aiY - aiSpeed);
-      }
+    const aiSpeed = Math.min(8, 4.5 + gameSec * 0.03) * dtf;
+    if (Math.abs(aiCenter - ball.y) > 10) {
+      if (aiCenter < ball.y) aiY = Math.min(H - PADDLE_H, aiY + aiSpeed);
+      else aiY = Math.max(0, aiY - aiSpeed);
     }
 
-    // Trail update
     trail.push({ x: ball.x, y: ball.y });
     if (trail.length > 12) trail.shift();
 
-    ball.x += ball.vx;
-    ball.y += ball.vy;
+    const events = PongPhysics.step(ball, dtf, W, H, playerY, aiY);
+    const speedNow = PongPhysics.speed(ball);
+    GameAudio.setIntensity(speedNow / PongPhysics.BASE);
 
-    if (ball.y - ball.r < 0) {
-      ball.y = ball.r;
-      ball.vy *= -1;
-      spawnParticles(ball.x, ball.y, '200, 230, 255');
-    }
-    if (ball.y + ball.r > H) {
-      ball.y = H - ball.r;
-      ball.vy *= -1;
-      spawnParticles(ball.x, ball.y, '200, 230, 255');
-    }
-
-    if (ball.x - ball.r < PAD_X + PADDLE_W && ball.x - ball.r > PAD_X && ball.vx < 0) {
-      if (ball.y > playerY && ball.y < playerY + PADDLE_H) {
-        ball.x = PAD_X + PADDLE_W + ball.r;
-        ball.vx *= -1.05;
-        const hitPos = (ball.y - (playerY + PADDLE_H / 2)) / (PADDLE_H / 2);
-        ball.vy += hitPos * 3;
-        ball.vx = Math.max(ball.vx, 5.5);
-        spawnParticles(ball.x, ball.y, '255, 50, 50');
+    for (const e of events) {
+      if (e.t === 'wall') {
+        spawnParticles(ball.x, ball.y, '200, 230, 255');
+        GameAudio.wall();
+      } else if (e.t === 'paddle') {
+        spawnParticles(ball.x, ball.y, e.side === 'left' ? '255, 50, 50' : '50, 100, 255');
         shakeTime = 0.25;
-      }
-    }
-
-    if (ball.x + ball.r > W - PAD_X - PADDLE_W && ball.x + ball.r < W - PAD_X && ball.vx > 0) {
-      if (ball.y > aiY && ball.y < aiY + PADDLE_H) {
-        ball.x = W - PAD_X - PADDLE_W - ball.r;
-        ball.vx *= -1.05;
-        const hitPos = (ball.y - (aiY + PADDLE_H / 2)) / (PADDLE_H / 2);
-        ball.vy += hitPos * 3;
-        ball.vx = Math.min(ball.vx, -5.5);
-        spawnParticles(ball.x, ball.y, '50, 100, 255');
-        shakeTime = 0.25;
-      }
-    }
-
-    if (ball.x - ball.r < 0) {
-      aiScore++;
-      flashAlpha = 0.3;
-      if (aiScore >= 5) {
-        endGame('AI WINS');
-      } else {
-        resetBall();
-      }
-    }
-    if (ball.x + ball.r > W) {
-      playerScore++;
-      flashAlpha = 0.3;
-      if (playerScore >= 5) {
-        endGame('YOU WIN!');
-      } else {
-        resetBall();
+        GameAudio.hit(e.side, speedNow / PongPhysics.BASE);
+      } else if (e.t === 'score') {
+        flashAlpha = 0.3;
+        if (e.side === 'right') {
+          aiScore++;
+          GameAudio.score(false);
+          if (aiScore >= PongPhysics.WIN) endGame('AI WINS'); else resetBall();
+        } else {
+          playerScore++;
+          GameAudio.score(true);
+          if (playerScore >= PongPhysics.WIN) endGame('YOU WIN!'); else resetBall();
+        }
       }
     }
   }
@@ -2626,10 +2920,15 @@ const CosmicBackground = {
     resultText.textContent = msg;
     scoreDisplay.textContent = playerScore + ' - ' + aiScore;
     overlay.classList.add('visible');
+    GameAudio.stopMusic();
+    if (playerScore > aiScore) GameAudio.win(); else GameAudio.lose();
   }
 
-  function gameLoop() {
-    update();
+  function gameLoop(now) {
+    now = now || performance.now();
+    const dtf = Math.min(2.5, Math.max(0.1, (now - lastFrame) / 16.6667));
+    lastFrame = now;
+    update(dtf);
     draw();
     requestAnimationFrame(gameLoop);
   }
@@ -2649,7 +2948,8 @@ const CosmicBackground = {
     e.preventDefault();
   }
   function spOnMove(e) {
-    if (!spTouchActive || currentScreen !== 'single') return;
+    if (currentScreen !== 'single') return;
+    if (!spTouchActive && e.pointerType !== 'mouse') return;
     playerY = spPointerToY(e.clientY);
     e.preventDefault();
   }
@@ -2876,7 +3176,9 @@ const CosmicBackground = {
       alert('Anon key missing.\n\nSupabase → Settings → API → anon public\nPaste it into SUPABASE_ANON_KEY in index.html');
       return null;
     }
-    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      realtime: { params: { eventsPerSecond: 60 } }
+    });
     return supabase;
   }
 
@@ -3076,132 +3378,200 @@ const CosmicBackground = {
     const myNameDisplay = document.getElementById('myNameDisplay');
     const oppNameDisplay = document.getElementById('oppNameDisplay');
     const touchZone = document.getElementById('onlineTouchZone');
+    const touchHint = document.querySelector('[data-screen="onlineGame"] .touch-hint');
 
-    let W = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
-    let H = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-    const PADDLE_H = 110, PADDLE_W = 8, BALL_R = 9;
-    const PLAYER_SPEED = 8;
-    const PAD_X = 28;
+    const P = PongPhysics;
+    /* Every device plays on the SAME logical court. Each screen just scales it
+       to fit (and turns it upright on a portrait phone), so a phone and a
+       laptop always agree on where the ball and paddles are. */
+    const LW = 800, LH = 500;
+    const PH = P.PADDLE_H, PW = P.PADDLE_W, PAD_X = P.PAD_X, WIN = P.WIN;
+    const KEY_SPEED = 8;          // logical px per 60fps frame
+    const SEND_MS = 50;           // 20 network updates / second
 
     const host = conn.isHost;
     const myRole = host ? 'left' : 'right';
     const myName = conn.myName || (window.OrbitProfile ? window.OrbitProfile.getName() : 'Player');
-    const oppName = conn.oppName || 'Opponent';
+    let oppName = conn.oppName || 'Opponent';
     if (playerRoleTag) playerRoleTag.textContent = host ? 'P1 · ' + myName : 'P2 · ' + myName;
-    if (roomStatus) roomStatus.textContent = 'Room ' + conn.roomCode + (host ? ' · Host' : ' · Guest');
     if (myNameDisplay) myNameDisplay.textContent = myName;
     if (oppNameDisplay) oppNameDisplay.textContent = oppName;
 
-    let playerY = (H - PADDLE_H) / 2;
-    let oppY = (H - PADDLE_H) / 2;
-    let ball = { x: W / 2, y: H / 2, vx: 6, vy: 3, r: BALL_R };
-    let playerScore = 0, oppScore = 0;
-    let running = false;
+    const ball = { x: LW / 2, y: LH / 2, vx: 0, vy: 0, r: P.BALL_R };
+    let myY = (LH - PH) / 2, oppY = myY, oppTarget = myY;
+    let myScore = 0, oppScore = 0;
+    let running = false, recorded = false, closed = false;
+    let gameSec = 0, time = 0;
     let keys = {};
-    let trail = [];
-    let particles = [];
-    let shakeTime = 0;
-    let flashAlpha = 0;
-    let time = 0;
-    let lastSend = 0;
+    let trail = [], particles = [];
+    let shakeTime = 0, flashAlpha = 0;
+    let lastFrame = performance.now();
+    let seq = 0, lastSeq = -1, lastStateSent = 0, evSinceSend = false, synced = false;
+    let inputDirty = false, lastInputSent = 0, lastSentY = -1;
+    let oneWay = 0.04, pingMs = null, pingTimer = null;
 
-    function resizeCanvas() {
+    function updateStatus() {
+      if (!roomStatus) return;
+      roomStatus.textContent = 'Room ' + conn.roomCode + (host ? ' · Host' : ' · Guest' + (pingMs != null ? ' · ' + Math.round(pingMs) + ' ms' : ''));
+    }
+    updateStatus();
+
+    /* ---------- view: fit the logical court to this screen ---------- */
+    let W = 0, H = 0, portrait = false, scale = 1, offX = 0, offY = 0;
+    function layout() {
       const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const size = getGameSize();
-      W = size.w;
-      H = size.h;
+      W = size.w; H = size.h;
       canvas.width = Math.floor(W * dpr);
       canvas.height = Math.floor(H * dpr);
       canvas.style.width = '100%';
       canvas.style.height = '100%';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      playerY = Math.max(0, Math.min(H - PADDLE_H, playerY));
-      oppY = Math.max(0, Math.min(H - PADDLE_H, oppY));
+      portrait = H > W * 1.15;
+      const cw = portrait ? LH : LW, ch = portrait ? LW : LH;
+      scale = Math.min(W / cw, H / ch);
+      offX = (W - cw * scale) / 2;
+      offY = (H - ch * scale) / 2;
       CosmicBackground.init(W, H);
+      if (touchHint) touchHint.textContent = portrait ? 'Slide left / right to move paddle' : 'Drag up / down to move paddle';
+    }
+    /* Portrait phones turn the court so that YOUR paddle is at the bottom. */
+    function courtTransform() {
+      if (!portrait) { ctx.translate(offX, offY); ctx.scale(scale, scale); }
+      else if (host) { ctx.translate(offX, offY + LW * scale); ctx.rotate(-Math.PI / 2); ctx.scale(scale, scale); }
+      else { ctx.translate(offX + LH * scale, offY); ctx.rotate(Math.PI / 2); ctx.scale(scale, scale); }
+    }
+    const clampY = (y) => Math.max(0, Math.min(LH - PH, y));
+    function pointerToY(cx, cy) {
+      const rect = canvas.getBoundingClientRect();
+      const px = (cx - rect.left) * (W / (rect.width || W));
+      const py = (cy - rect.top) * (H / (rect.height || H));
+      let ly;
+      if (!portrait) ly = (py - offY) / scale;
+      else if (host) ly = (px - offX) / scale;
+      else ly = (offX + LH * scale - px) / scale;
+      return clampY(ly - PH / 2);
     }
 
-    function resetBall() {
-      ball.x = W / 2;
-      ball.y = H / 2;
-      ball.vx = (Math.random() > 0.5 ? 1 : -1) * 6;
-      ball.vy = (Math.random() * 4 - 2) * 2;
-      trail = [];
-      particles = [];
-    }
-
-    function resetGame() {
-      playerScore = 0;
-      oppScore = 0;
-      playerY = (H - PADDLE_H) / 2;
-      oppY = (H - PADDLE_H) / 2;
-      resetBall();
-      overlay.classList.remove('visible');
-      restartBtn.style.display = 'none';
-      running = true;
-      shakeTime = 0;
-      flashAlpha = 0;
-      CosmicBackground.init(W, H);
-      if (host) sendState();
-    }
-
+    /* ---------- networking ---------- */
+    const r2 = (v) => Math.round(v * 100) / 100;
     function sendState() {
-      if (!conn.channel) return;
+      if (!conn.channel || !host) return;
+      lastStateSent = performance.now();
       conn.channel.send({
-        type: 'broadcast',
-        event: 'state',
+        type: 'broadcast', event: 'state',
         payload: {
-          ball: { x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy },
-          leftY: host ? playerY : oppY,
-          rightY: host ? oppY : playerY,
-          leftScore: host ? playerScore : oppScore,
-          rightScore: host ? oppScore : playerScore,
-          trail: trail.slice(-6),
-          running
+          n: ++seq,
+          b: [r2(ball.x), r2(ball.y), r2(ball.vx), r2(ball.vy)],
+          l: r2(myY), hn: myName,
+          ls: myScore, rs: oppScore,
+          run: running, ev: evSinceSend
         }
       });
+      evSinceSend = false;
+    }
+    function sendInput(now) {
+      if (!conn.channel || host) return;
+      lastInputSent = now;
+      inputDirty = false;
+      conn.channel.send({ type: 'broadcast', event: 'input', payload: { y: r2(myY) } });
     }
 
-    function sendInput() {
-      if (!conn.channel) return;
-      conn.channel.send({
-        type: 'broadcast',
-        event: 'input',
-        payload: { y: playerY }
-      });
-    }
+    conn.channel.on('broadcast', { event: 'state' }, ({ payload: p }) => {
+      if (host || !p || !p.b || p.n <= lastSeq) return;
+      lastSeq = p.n;
+      if (p.hn && p.hn !== oppName) {
+        oppName = p.hn;
+        if (oppNameDisplay) oppNameDisplay.textContent = oppName;
+      }
+      if (p.run && !running && p.ls < WIN && p.rs < WIN) startRound();
 
-    conn.channel.on('broadcast', { event: 'state' }, ({ payload }) => {
-      if (host || !payload) return;
-      ball.x = payload.ball.x;
-      ball.y = payload.ball.y;
-      ball.vx = payload.ball.vx;
-      ball.vy = payload.ball.vy;
-      if (myRole === 'right') {
-        oppY = payload.leftY;
-        playerScore = payload.rightScore;
-        oppScore = payload.leftScore;
+      // Sounds for points (the host decides who scored)
+      if (p.rs > myScore) { GameAudio.score(true); flashAlpha = 0.3; }
+      else if (p.ls > oppScore) { GameAudio.score(false); flashAlpha = 0.3; }
+      myScore = p.rs; oppScore = p.ls;
+      oppTarget = p.l;
+
+      // Ball: jump ahead by the network delay, then glide onto the host's truth
+      const lead = oneWay * 60;
+      const bx = p.b[0] + p.b[2] * lead;
+      const by = Math.max(ball.r, Math.min(LH - ball.r, p.b[1] + p.b[3] * lead));
+      if (!synced || p.ev || Math.hypot(bx - ball.x, by - ball.y) > 50) {
+        ball.x = bx; ball.y = by; synced = true;
       } else {
-        oppY = payload.rightY;
-        playerScore = payload.leftScore;
-        oppScore = payload.rightScore;
+        ball.x += (bx - ball.x) * 0.4;
+        ball.y += (by - ball.y) * 0.4;
       }
-      if (payload.trail) trail = payload.trail;
-      if (payload.running === false && running) {
-        endGame(playerScore >= 5 ? 'YOU WIN!' : 'YOU LOSE');
-      } else if (payload.running && !running && playerScore < 5 && oppScore < 5) {
-        running = true;
-        overlay.classList.remove('visible');
-      }
+      ball.vx = p.b[2]; ball.vy = p.b[3];
+
+      if (p.run === false && running) endGame();
     });
 
     conn.channel.on('broadcast', { event: 'input' }, ({ payload }) => {
-      if (!host || !payload) return;
-      oppY = payload.y;
+      if (!host || !payload || typeof payload.y !== 'number') return;
+      oppTarget = clampY(payload.y);
     });
+    conn.channel.on('broadcast', { event: 'restart' }, () => { if (!host) startRound(); });
+    conn.channel.on('broadcast', { event: 'rematch' }, () => { if (host && !running) restartHost(); });
+    conn.channel.on('broadcast', { event: 'ping' }, ({ payload }) => {
+      if (host) conn.channel.send({ type: 'broadcast', event: 'pong', payload });
+    });
+    conn.channel.on('broadcast', { event: 'pong' }, ({ payload }) => {
+      if (host || !payload) return;
+      const rtt = performance.now() - payload.t;
+      if (rtt > 0 && rtt < 3000) {
+        pingMs = pingMs == null ? rtt : pingMs * 0.6 + rtt * 0.4;
+        oneWay = Math.min(0.3, pingMs / 2000);
+        updateStatus();
+      }
+    });
+    if (!host) {
+      const ping = () => { try { conn.channel.send({ type: 'broadcast', event: 'ping', payload: { t: performance.now() } }); } catch (_) {} };
+      setTimeout(ping, 400);
+      pingTimer = setInterval(ping, 2000);
+    }
 
-    conn.channel.on('broadcast', { event: 'restart' }, () => {
-      resetGame();
-    });
+    /* ---------- game flow ---------- */
+    function startRound() {
+      myScore = 0; oppScore = 0; gameSec = 0; recorded = false; synced = false;
+      myY = oppY = oppTarget = (LH - PH) / 2;
+      trail = []; particles = []; shakeTime = 0; flashAlpha = 0;
+      overlay.classList.remove('visible');
+      restartBtn.style.display = 'none';
+      restartBtn.disabled = false;
+      running = true;
+      lastFrame = performance.now();
+      GameAudio.startMusic();
+    }
+    function restartHost() {
+      startRound();
+      P.serve(ball, LW, LH, P.serveSpeed(0));
+      conn.channel.send({ type: 'broadcast', event: 'restart', payload: {} });
+      evSinceSend = true;
+      sendState();
+    }
+    function endGame() {
+      if (!running) return;
+      running = false;
+      const win = myScore > oppScore;
+      resultText.textContent = win ? 'YOU WIN!' : 'YOU LOSE';
+      scoreDisplay.textContent = myScore + ' - ' + oppScore;
+      overlay.classList.add('visible');
+      restartBtn.textContent = host ? 'Play Again' : 'Rematch';
+      restartBtn.style.display = 'inline-flex';
+      GameAudio.stopMusic();
+      if (win) GameAudio.win(); else GameAudio.lose();
+      if (host) {
+        sendState();
+        // the final state is re-sent so a dropped packet can't leave the guest hanging
+        setTimeout(() => { if (!closed && !running) sendState(); }, 250);
+        setTimeout(() => { if (!closed && !running) sendState(); }, 700);
+      }
+      if (!recorded) {
+        recorded = true;
+        if (window.OrbitProfile) window.OrbitProfile.recordMatch(oppName, myScore, oppScore);
+      }
+    }
 
     function spawnParticles(x, y, color) {
       for (let i = 0; i < 12; i++) {
@@ -3269,79 +3639,72 @@ const CosmicBackground = {
       ctx.shadowBlur = 0;
     }
 
-    function update() {
-      if (!running) return;
-      time += 0.016;
-      if (shakeTime > 0) shakeTime -= 0.05;
-      if (flashAlpha > 0) flashAlpha -= 0.05;
-
-      if (keys['w'] || keys['ArrowUp']) playerY = Math.max(0, playerY - PLAYER_SPEED);
-      if (keys['s'] || keys['ArrowDown']) playerY = Math.min(H - PADDLE_H, playerY + PLAYER_SPEED);
-
-      const now = performance.now();
-      if (!host) {
-        if (now - lastSend > 33) {
-          sendInput();
-          lastSend = now;
+    /* ---------- simulation ---------- */
+    function handleEvents(evs, authoritative) {
+      for (const e of evs) {
+        const spd = P.speed(ball) / P.BASE;
+        if (e.t === 'wall') {
+          spawnParticles(ball.x, ball.y, '200, 230, 255');
+          GameAudio.wall();
+          evSinceSend = true;
+        } else if (e.t === 'paddle') {
+          spawnParticles(ball.x, ball.y, e.side === 'left' ? '255, 50, 50' : '50, 100, 255');
+          shakeTime = 0.25;
+          GameAudio.hit(e.side, spd);
+          evSinceSend = true;
+        } else if (e.t === 'score' && authoritative) {
+          flashAlpha = 0.3;
+          evSinceSend = true;
+          const mine = e.side === myRole;
+          if (mine) myScore++; else oppScore++;
+          GameAudio.score(mine);
+          if (myScore >= WIN || oppScore >= WIN) endGame();
+          else { P.serve(ball, LW, LH, P.serveSpeed(gameSec)); trail = []; }
         }
-        return;
       }
+    }
+
+    function tick(dtf, now) {
+      time += 0.016 * dtf;
+      if (shakeTime > 0) shakeTime -= 0.05 * dtf;
+      if (flashAlpha > 0) flashAlpha -= 0.05 * dtf;
+      for (const p of particles) {
+        p.x += p.vx * dtf; p.y += p.vy * dtf;
+        const d = Math.pow(0.96, dtf);
+        p.vx *= d; p.vy *= d; p.life -= p.decay * dtf;
+      }
+      particles = particles.filter(p => p.life > 0);
+      if (!running) return;
+
+      // keyboard (laptop)
+      let dy = 0;
+      if (keys['w'] || keys['ArrowUp']) dy -= KEY_SPEED * dtf;
+      if (keys['s'] || keys['ArrowDown']) dy += KEY_SPEED * dtf;
+      if (dy) { myY = clampY(myY + dy); inputDirty = true; }
+
+      // the other paddle glides toward its last known position
+      oppY += (oppTarget - oppY) * Math.min(1, 0.6 * dtf);
 
       trail.push({ x: ball.x, y: ball.y });
       if (trail.length > 12) trail.shift();
-      ball.x += ball.vx;
-      ball.y += ball.vy;
 
-      if (ball.y - ball.r < 0) { ball.y = ball.r; ball.vy *= -1; spawnParticles(ball.x, ball.y, '200, 230, 255'); }
-      if (ball.y + ball.r > H) { ball.y = H - ball.r; ball.vy *= -1; spawnParticles(ball.x, ball.y, '200, 230, 255'); }
-
-      if (ball.x - ball.r < PAD_X + PADDLE_W && ball.x - ball.r > PAD_X && ball.vx < 0) {
-        if (ball.y > playerY && ball.y < playerY + PADDLE_H) {
-          ball.x = PAD_X + PADDLE_W + ball.r;
-          ball.vx *= -1.05;
-          const hitPos = (ball.y - (playerY + PADDLE_H / 2)) / (PADDLE_H / 2);
-          ball.vy += hitPos * 3;
-          ball.vx = Math.max(ball.vx, 5.5);
-          spawnParticles(ball.x, ball.y, '255, 50, 50');
-          shakeTime = 0.25;
-        }
+      if (host) {
+        gameSec += dtf / 60;
+        handleEvents(P.step(ball, dtf, LW, LH, myY, oppY), true);
+        if (running && (now - lastStateSent >= SEND_MS || (evSinceSend && now - lastStateSent >= 16))) sendState();
+      } else {
+        // the guest predicts the ball between host updates, so motion stays smooth
+        handleEvents(P.step(ball, dtf, LW, LH, oppY, myY, { noScore: true }), false);
+        if (inputDirty && now - lastInputSent >= SEND_MS) sendInput(now);
       }
-      if (ball.x + ball.r > W - PAD_X - PADDLE_W && ball.x + ball.r < W - PAD_X && ball.vx > 0) {
-        if (ball.y > oppY && ball.y < oppY + PADDLE_H) {
-          ball.x = W - PAD_X - PADDLE_W - ball.r;
-          ball.vx *= -1.05;
-          const hitPos = (ball.y - (oppY + PADDLE_H / 2)) / (PADDLE_H / 2);
-          ball.vy += hitPos * 3;
-          ball.vx = Math.min(ball.vx, -5.5);
-          spawnParticles(ball.x, ball.y, '50, 100, 255');
-          shakeTime = 0.25;
-        }
-      }
-
-      if (ball.x - ball.r < 0) {
-        oppScore++;
-        flashAlpha = 0.3;
-        if (oppScore >= 5) endGame('YOU LOSE');
-        else resetBall();
-      }
-      if (ball.x + ball.r > W) {
-        playerScore++;
-        flashAlpha = 0.3;
-        if (playerScore >= 5) endGame('YOU WIN!');
-        else resetBall();
-      }
-
-      if (now - lastSend > 33) {
-        sendState();
-        lastSend = now;
-      }
+      GameAudio.setIntensity(P.speed(ball) / P.BASE);
     }
 
     function draw() {
       ctx.save();
       if (shakeTime > 0) {
-        const s = shakeTime * 8;
-        ctx.translate((Math.random() - 0.5) * s, (Math.random() - 0.5) * s);
+        const sh = shakeTime * 8;
+        ctx.translate((Math.random() - 0.5) * sh, (Math.random() - 0.5) * sh);
       }
       CosmicBackground.draw(ctx, W, H, time);
       if (flashAlpha > 0) {
@@ -3350,128 +3713,132 @@ const CosmicBackground = {
       }
       ctx.font = '500 36px "Inter", system-ui, sans-serif';
       ctx.textAlign = 'center';
+      ctx.shadowBlur = 0;
       ctx.fillStyle = 'rgba(150,155,165,0.9)';
-      ctx.fillText(playerScore + ' - ' + oppScore, W / 2, 52);
+      ctx.fillText(myScore + ' - ' + oppScore, W / 2, 100);
+      drawSpeedHud(ctx, W, P.speed(ball) / P.BASE, 122);
 
-      for (const p of particles) {
-        p.x += p.vx; p.y += p.vy; p.vx *= 0.96; p.vy *= 0.96; p.life -= p.decay;
-        if (p.life > 0) {
-          ctx.fillStyle = `rgba(${p.color},${p.life})`;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-          ctx.fill();
-        }
+      ctx.save();
+      courtTransform();
+      if (offX > 2 || offY > 2) {
+        ctx.strokeStyle = 'rgba(120,150,220,0.16)';
+        ctx.lineWidth = 1.5 / scale;
+        ctx.strokeRect(0, 0, LW, LH);
       }
-      particles = particles.filter(p => p.life > 0);
-
-      const leftY = myRole === 'left' ? playerY : oppY;
-      const rightY = myRole === 'left' ? oppY : playerY;
-      drawPaddle(PAD_X, leftY, PADDLE_W, PADDLE_H, '#ff2222', '#b00000', '#ff3030');
-      drawPaddle(W - PAD_X - PADDLE_W, rightY, PADDLE_W, PADDLE_H, '#2266ff', '#0030b0', '#3060ff');
-      drawBall();
+      for (const p of particles) {
+        ctx.fillStyle = `rgba(${p.color},${p.life})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      const leftY = myRole === 'left' ? myY : oppY;
+      const rightY = myRole === 'left' ? oppY : myY;
+      drawPaddle(PAD_X, leftY, PW, PH, '#ff2222', '#b00000', '#ff3030');
+      drawPaddle(LW - PAD_X - PW, rightY, PW, PH, '#2266ff', '#0030b0', '#3060ff');
+      if (ball.x > -40 && ball.x < LW + 40) drawBall();
+      ctx.restore();
       ctx.restore();
     }
 
-    function endGame(msg) {
-      running = false;
-      resultText.textContent = msg;
-      scoreDisplay.textContent = playerScore + ' - ' + oppScore;
-      overlay.classList.add('visible');
-      restartBtn.style.display = 'inline-flex';
-      if (host) sendState();
-      // Record match history locally
-      if (window.OrbitProfile) {
-        window.OrbitProfile.recordMatch(oppName, playerScore, oppScore);
-      }
-    }
-
-    function loop() {
-      update();
+    function loop(now) {
+      if (closed) return;
+      now = now || performance.now();
+      const dtf = Math.min(2.5, Math.max(0.1, (now - lastFrame) / 16.6667));
+      lastFrame = now;
+      tick(dtf, now);
       draw();
       gameLoopId = requestAnimationFrame(loop);
     }
 
+    /* ---------- input: keyboard, mouse, touch ---------- */
+    const keyName = (e) => (e.key.length === 1 ? e.key.toLowerCase() : e.key);
     function onKeyDown(e) {
-      keys[e.key] = true;
-      if (e.key === ' ' && currentScreen === 'onlineGame' && !running) {
+      keys[keyName(e)] = true;
+      if (e.key === ' ' && currentScreen === 'onlineGame' && !running && host) {
         e.preventDefault();
-        if (host) {
-          resetGame();
-          conn.channel.send({ type: 'broadcast', event: 'restart', payload: {} });
-        }
+        restartHost();
       }
     }
-    function onKeyUp(e) { keys[e.key] = false; }
-    const onResize = () => { if (currentScreen === 'onlineGame') resizeCanvas(); };
-    if (window.visualViewport) {
-      window.visualViewport.addEventListener('resize', onResize);
-      window.visualViewport.addEventListener('scroll', onResize);
-    }
+    function onKeyUp(e) { keys[keyName(e)] = false; }
 
-    // Smooth touch / pointer control for mobile (absolute Y tracking)
     let touchActive = false;
-    function pointerToPaddleY(clientY) {
-      const rect = canvas.getBoundingClientRect();
-      const y = ((clientY - rect.top) / rect.height) * H;
-      return Math.max(0, Math.min(H - PADDLE_H, y - PADDLE_H / 2));
+    function setFromPointer(e) {
+      const y = pointerToY(e.clientX, e.clientY);
+      if (y !== myY) { myY = y; inputDirty = true; }
     }
     function onPointerDown(e) {
       if (currentScreen !== 'onlineGame') return;
       touchActive = true;
-      playerY = pointerToPaddleY(e.clientY);
+      setFromPointer(e);
       e.preventDefault();
     }
     function onPointerMove(e) {
-      if (!touchActive || currentScreen !== 'onlineGame') return;
-      playerY = pointerToPaddleY(e.clientY);
+      if (currentScreen !== 'onlineGame') return;
+      // touch needs a finger down; a mouse simply hovers
+      if (!touchActive && e.pointerType !== 'mouse') return;
+      setFromPointer(e);
       e.preventDefault();
     }
     function onPointerUp() { touchActive = false; }
 
     const touchTarget = touchZone || canvas;
-    touchTarget.addEventListener('pointerdown', onPointerDown, { passive: false });
-    touchTarget.addEventListener('pointermove', onPointerMove, { passive: false });
-    touchTarget.addEventListener('pointerup', onPointerUp);
-    touchTarget.addEventListener('pointercancel', onPointerUp);
-    // Also allow dragging on the whole canvas for better UX
-    canvas.addEventListener('pointerdown', onPointerDown, { passive: false });
-    canvas.addEventListener('pointermove', onPointerMove, { passive: false });
-    canvas.addEventListener('pointerup', onPointerUp);
-    canvas.addEventListener('pointercancel', onPointerUp);
+    const targets = touchTarget === canvas ? [canvas] : [touchTarget, canvas];
+    targets.forEach(t => {
+      t.addEventListener('pointerdown', onPointerDown, { passive: false });
+      t.addEventListener('pointermove', onPointerMove, { passive: false });
+      t.addEventListener('pointerup', onPointerUp);
+      t.addEventListener('pointercancel', onPointerUp);
+    });
 
+    const onResize = () => { if (currentScreen === 'onlineGame') layout(); };
+    const onOrient = () => setTimeout(onResize, 250);
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
     window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onOrient);
+    if (window.visualViewport) {
+      window.visualViewport.addEventListener('resize', onResize);
+      window.visualViewport.addEventListener('scroll', onResize);
+    }
 
     restartBtn.onclick = () => {
-      if (host) {
-        resetGame();
-        conn.channel.send({ type: 'broadcast', event: 'restart', payload: {} });
+      if (host) restartHost();
+      else {
+        conn.channel.send({ type: 'broadcast', event: 'rematch', payload: {} });
+        restartBtn.disabled = true;
+        restartBtn.textContent = 'Waiting for host…';
       }
     };
 
     onlineGameCleanup = () => {
+      closed = true;
+      clearInterval(pingTimer);
+      GameAudio.stopMusic();
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
       window.removeEventListener('resize', onResize);
+      window.removeEventListener('orientationchange', onOrient);
       if (window.visualViewport) {
         window.visualViewport.removeEventListener('resize', onResize);
         window.visualViewport.removeEventListener('scroll', onResize);
       }
-      touchTarget.removeEventListener('pointerdown', onPointerDown);
-      touchTarget.removeEventListener('pointermove', onPointerMove);
-      touchTarget.removeEventListener('pointerup', onPointerUp);
-      touchTarget.removeEventListener('pointercancel', onPointerUp);
-      canvas.removeEventListener('pointerdown', onPointerDown);
-      canvas.removeEventListener('pointermove', onPointerMove);
-      canvas.removeEventListener('pointerup', onPointerUp);
-      canvas.removeEventListener('pointercancel', onPointerUp);
+      targets.forEach(t => {
+        t.removeEventListener('pointerdown', onPointerDown);
+        t.removeEventListener('pointermove', onPointerMove);
+        t.removeEventListener('pointerup', onPointerUp);
+        t.removeEventListener('pointercancel', onPointerUp);
+      });
       if (gameLoopId) cancelAnimationFrame(gameLoopId);
       gameLoopId = null;
     };
 
-    resizeCanvas();
-    resetGame();
+    layout();
+    startRound();
+    if (host) {
+      P.serve(ball, LW, LH, P.serveSpeed(0));
+      evSinceSend = true;
+      sendState();
+    }
     if (gameLoopId) cancelAnimationFrame(gameLoopId);
     loop();
   }
